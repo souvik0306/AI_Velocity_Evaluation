@@ -1,6 +1,8 @@
 *.bag
 *.ulg
 *.csv
+*.png
+*.txt
 __pycache__/2_plot_vel_csv_data.cpython-38.pyc
 __pycache__/5_manual_relative_window_clipping.cpython-38.pyc
 __pycache__/7_plot_absolute_velocity_error.cpython-38.pyc
