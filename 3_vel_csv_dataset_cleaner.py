@@ -8,6 +8,7 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from scipy.signal import savgol_filter
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,49 @@ def _apply_median_filter(
 	return filtered_counts
 
 
+def _apply_savitzky_golay_filter(
+	df: pd.DataFrame,
+	columns: Iterable[str],
+	window: int,
+	polyorder: int,
+) -> None:
+	"""Apply Savitzky-Golay filter to smooth data.
+	
+	Args:
+		df: DataFrame to modify in place
+		columns: Columns to apply filter to
+		window: Window size (must be odd)
+		polyorder: Polynomial order for the filter
+	"""
+	# Ensure window is odd
+	if window % 2 == 0:
+		window += 1
+	
+	# Ensure polyorder < window
+	if polyorder >= window:
+		polyorder = window - 1
+	
+	for col in columns:
+		# Only apply if there are values (skip all-NaN columns)
+		if df[col].notna().sum() == 0:
+			continue
+		
+		# Apply Savitzky-Golay filter handling NaN values
+		valid_mask = df[col].notna()
+		if valid_mask.sum() < window:
+			# Not enough points, skip
+			continue
+		
+		# Get the valid data points
+		valid_data = df.loc[valid_mask, col].values
+		
+		# Apply filter only if we have enough points
+		if len(valid_data) >= window:
+			smoothed = savgol_filter(valid_data, window_length=window, polyorder=polyorder)
+			# Update only the valid indices
+			df.loc[valid_mask, col] = smoothed
+
+
 def _interpolate_columns(df: pd.DataFrame, columns: Iterable[str]) -> None:
 	for col in columns:
 		if df[col].isna().any():
@@ -129,6 +173,8 @@ def clean_dataframe(
 	median_tol_override: Optional[float],
 	bound_overrides: List[Tuple[str, Optional[float], Optional[float]]],
 	fill: str,
+	savgol_window: Optional[int] = None,
+	savgol_polyorder: int = 3,
 ) -> Tuple[pd.DataFrame, Dict[str, int], Dict[str, int]]:
 	if "time" in df.columns:
 		df = df.sort_values("time")
@@ -149,8 +195,13 @@ def clean_dataframe(
 		rules_by_column,
 	)
 
+	# Interpolate before applying Savitzky-Golay filter
 	if fill == "linear":
 		_interpolate_columns(df, columns)
+
+	# Apply Savitzky-Golay filter for smoothing if requested
+	if savgol_window is not None and savgol_window > 0:
+		_apply_savitzky_golay_filter(df, columns, savgol_window, savgol_polyorder)
 
 	return df, pruned_counts, filtered_counts
 
@@ -197,6 +248,18 @@ def main() -> None:
 		default="linear",
 		help="Fill NaNs after filtering (default: linear to avoid NaNs)",
 	)
+	parser.add_argument(
+		"--savgol_window",
+		type=int,
+		default=21,
+		help="Savitzky-Golay filter window size for smoothing spikes (must be odd)",
+	)
+	parser.add_argument(
+		"--savgol_polyorder",
+		type=int,
+		default=2,
+		help="Polynomial order for Savitzky-Golay filter (default: 3)",
+	)
 	args = parser.parse_args()
 
 	input_files: List[str] = []
@@ -229,6 +292,8 @@ def main() -> None:
 			args.median_tol,
 			bound_overrides,
 			args.fill,
+			savgol_window=args.savgol_window,
+			savgol_polyorder=args.savgol_polyorder,
 		)
 
 		output_path = _derive_output_path(input_path, out_dir)
@@ -248,4 +313,6 @@ def main() -> None:
 if __name__ == "__main__":
 	main()
 
-# python3 3_vel_csv_dataset_cleaner.py --est_csv flight_6_27_vel_est.csv --gt_csv flight_6_27_vel_gt.csv 
+# python3 3_vel_csv_dataset_cleaner.py --est_csv flight_6_27_vel_est.csv --gt_csv flight_6_27_vel_gt.csv
+# Example with Savitzky-Golay smoothing for ground truth data:
+# python3 3_vel_csv_dataset_cleaner.py --est_csv flight_6_27_vel_est.csv --gt_csv flight_6_27_vel_gt.csv --savgol_window 11 --savgol_polyorder 3 
