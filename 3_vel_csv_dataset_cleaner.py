@@ -22,7 +22,7 @@ class ColumnRule:
 
 PROFILE_RULES: Dict[str, List[ColumnRule]] = {
 	"velocity": [
-		ColumnRule("vel", "vel_*", (-3.0, 3.0), 0.4),
+		ColumnRule("vel", "vel_*", (-8.0, 8.0), 0.4),
 	],
 }
 
