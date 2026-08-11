@@ -35,7 +35,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 DEFAULT_VELOCITY_BOUNDS = ["vel_*:-8:8"]
 
 
-def _load_script_module(filename: str, module_name: str):
+def load_script_module(filename: str, module_name: str):
 	spec = importlib.util.spec_from_file_location(module_name, SCRIPT_DIR / filename)
 	if spec is None or spec.loader is None:
 		raise ImportError(f"Could not load {filename}")
@@ -44,11 +44,11 @@ def _load_script_module(filename: str, module_name: str):
 	return module
 
 
-CLEANER = _load_script_module("3_vel_csv_dataset_cleaner.py", "vel_csv_dataset_cleaner")
-VHE = _load_script_module("9_velocity_heading_error.py", "velocity_heading_error")
+CLEANER = load_script_module("3_vel_csv_dataset_cleaner.py", "vel_csv_dataset_cleaner")
+VHE = load_script_module("9_velocity_heading_error.py", "velocity_heading_error")
 
 
-def _clean_csv(
+def clean_velocity_csv(
 	input_path: Path,
 	output_path: Path,
 	window: int,
@@ -73,7 +73,7 @@ def _clean_csv(
 	return output_path, pruned_counts, filtered_counts
 
 
-def _align_gt_to_est(
+def align_ground_truth_to_estimate(
 	est_clean_path: Path,
 	gt_clean_path: Path,
 	output_path: Path,
@@ -122,7 +122,7 @@ def _align_gt_to_est(
 	return output_path
 
 
-def _clip_window_pair(
+def clip_velocity_window(
 	est_clean_path: Path,
 	gt_aligned_path: Path,
 	window_start: float,
@@ -163,7 +163,7 @@ def _clip_window_pair(
 	return est_out, gt_out
 
 
-def _write_vhe_outputs(est_window_path: Path, gt_window_path: Path) -> Tuple[Path, Path, pd.DataFrame, pd.DataFrame]:
+def calculate_and_save_vhe(est_window_path: Path, gt_window_path: Path) -> Tuple[Path, Path, pd.DataFrame, pd.DataFrame]:
 	est_df = VHE._load_velocity_csv(est_window_path, VHE.REQUIRED_COLS)
 	gt_df = VHE._load_velocity_csv(gt_window_path, VHE.REQUIRED_COLS)
 	merged = VHE._merge_velocity_data(est_df, gt_df)
@@ -177,7 +177,7 @@ def _write_vhe_outputs(est_window_path: Path, gt_window_path: Path) -> Tuple[Pat
 	return samples_path, summary_path, summary, samples
 
 
-def _plot_velocity_components(est_window_path: Path, gt_window_path: Path, group: str, flight_name: str) -> Path:
+def plot_velocity_components(est_window_path: Path, gt_window_path: Path, group: str, flight_name: str) -> Path:
 	import matplotlib
 
 	matplotlib.use("Agg")
@@ -238,7 +238,7 @@ def _plot_velocity_components(est_window_path: Path, gt_window_path: Path, group
 	return out_path
 
 
-def _plot_horizontal_velocity(est_window_path: Path, gt_window_path: Path, group: str, flight_name: str) -> Path:
+def plot_horizontal_velocity(est_window_path: Path, gt_window_path: Path, group: str, flight_name: str) -> Path:
 	import matplotlib
 
 	matplotlib.use("Agg")
@@ -296,7 +296,7 @@ def _plot_horizontal_velocity(est_window_path: Path, gt_window_path: Path, group
 	return out_path
 
 
-def _summarize_samples_for_group(
+def summarize_samples_by_group(
 	samples_df: pd.DataFrame,
 	group: str,
 ) -> List[Dict[str, object]]:
@@ -323,19 +323,19 @@ def _summarize_samples_for_group(
 	return rows
 
 
-def _build_group_profile_summary(sample_frames: List[pd.DataFrame]) -> pd.DataFrame:
+def summarize_profiles_across_groups(sample_frames: List[pd.DataFrame]) -> pd.DataFrame:
 	if not sample_frames:
 		return pd.DataFrame()
 
 	all_samples = pd.concat(sample_frames, ignore_index=True)
 	rows: List[Dict[str, object]] = []
 	for group, group_df in all_samples.groupby("group", sort=False):
-		rows.extend(_summarize_samples_for_group(group_df, group))
-	rows.extend(_summarize_samples_for_group(all_samples, "ALL"))
-	return _ordered_group_summary_columns(pd.DataFrame(rows))
+		rows.extend(summarize_samples_by_group(group_df, group))
+	rows.extend(summarize_samples_by_group(all_samples, "ALL"))
+	return order_group_summary_columns(pd.DataFrame(rows))
 
 
-def _process_flight(
+def process_flight_window(
 	group: str,
 	flight: int,
 	window: Tuple[float, float],
@@ -356,7 +356,7 @@ def _process_flight(
 	gt_clean = group_out / f"{flight_name}_vel_gt_clean.csv"
 	gt_aligned = group_out / f"{flight_name}_vel_gt_clean_aligned.csv"
 
-	_clean_csv(
+	clean_velocity_csv(
 		est_raw,
 		est_clean,
 		args.clean_window,
@@ -366,7 +366,7 @@ def _process_flight(
 		args.savgol_window,
 		args.savgol_polyorder,
 	)
-	_clean_csv(
+	clean_velocity_csv(
 		gt_raw,
 		gt_clean,
 		args.clean_window,
@@ -376,17 +376,17 @@ def _process_flight(
 		args.savgol_window,
 		args.savgol_polyorder,
 	)
-	_align_gt_to_est(gt_latency=args.gt_latency, tolerance=args.tolerance, est_clean_path=est_clean, gt_clean_path=gt_clean, output_path=gt_aligned)
-	est_window, gt_window = _clip_window_pair(
+	align_ground_truth_to_estimate(gt_latency=args.gt_latency, tolerance=args.tolerance, est_clean_path=est_clean, gt_clean_path=gt_clean, output_path=gt_aligned)
+	est_window, gt_window = clip_velocity_window(
 		est_clean,
 		gt_aligned,
 		window[0],
 		window[1],
 		"_window",
 	)
-	_plot_velocity_components(est_window, gt_window, group, flight_name)
-	_plot_horizontal_velocity(est_window, gt_window, group, flight_name)
-	_, _, vhe_summary, vhe_samples = _write_vhe_outputs(est_window, gt_window)
+	plot_velocity_components(est_window, gt_window, group, flight_name)
+	plot_horizontal_velocity(est_window, gt_window, group, flight_name)
+	_, _, vhe_summary, vhe_samples = calculate_and_save_vhe(est_window, gt_window)
 	vhe_samples = vhe_samples.copy()
 	vhe_samples["group"] = group
 	vhe_samples["flight"] = flight_name
@@ -408,7 +408,7 @@ def _process_flight(
 	return rows, vhe_samples
 
 
-def _ordered_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
+def order_flight_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 	front = [
 		"group",
 		"flight",
@@ -429,7 +429,7 @@ def _ordered_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 	return df[[col for col in front if col in df.columns] + [col for col in df.columns if col not in front]]
 
 
-def _ordered_group_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
+def order_group_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 	front = [
 		"group",
 		"profile",
@@ -446,7 +446,7 @@ def _ordered_group_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 	return df[[col for col in front if col in df.columns] + [col for col in df.columns if col not in front]]
 
 
-def _drop_clean_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
+def remove_internal_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 	drop_cols = [
 		"profile",
 		"profile_label",
@@ -454,7 +454,7 @@ def _drop_clean_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 	return df.drop(columns=[col for col in drop_cols if col in df.columns])
 
 
-def main() -> None:
+def parse_arguments() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
 		description="Run the clean, align, window, plot, and VHE evaluation for the 31st July AI/RAW windows.",
 	)
@@ -485,47 +485,72 @@ def main() -> None:
 	parser.add_argument("--gt_latency", type=float, default=0.025, help="Seconds to subtract from GT time")
 	parser.add_argument("--tolerance", type=float, default=None, help="Optional max time delta for alignment")
 	args = parser.parse_args()
-
 	args.clean_window = CLEANER._normalize_window(args.clean_window)
 	args.bound_overrides = CLEANER._parse_bound_overrides(args.bound or DEFAULT_VELOCITY_BOUNDS)
+	return args
 
-	output_dir = Path(args.out_dir)
-	all_rows: List[Dict[str, object]] = []
-	sample_frames: List[pd.DataFrame] = []
 
+def select_evaluation_groups(args: argparse.Namespace) -> List[Tuple[str, Path, Dict[int, Tuple[float, float]]]]:
 	groups = []
 	if args.group in {"all", "AI"}:
 		groups.append(("AI", Path(args.ai_dir), AI_WINDOWS))
 	if args.group in {"all", "RAW"}:
 		groups.append(("RAW", Path(args.raw_dir), RAW_WINDOWS))
+	return groups
+
+
+def process_evaluation_groups(
+	groups: List[Tuple[str, Path, Dict[int, Tuple[float, float]]]],
+	output_dir: Path,
+	args: argparse.Namespace,
+) -> Tuple[pd.DataFrame, pd.DataFrame]:
+	all_rows: List[Dict[str, object]] = []
+	sample_frames: List[pd.DataFrame] = []
 
 	for group, source_dir, windows in groups:
 		for flight, window in windows.items():
 			print(f"Processing {group} flight_{flight}: {window[0]:.2f} -> {window[1]:.2f} s")
-			rows, samples = _process_flight(group, flight, window, source_dir, output_dir, args)
+			rows, samples = process_flight_window(group, flight, window, source_dir, output_dir, args)
 			all_rows.extend(rows)
 			sample_frames.append(samples)
 
 	if not all_rows:
 		raise SystemExit("No flights processed")
 
-	summary_df_full = _ordered_summary_columns(pd.DataFrame(all_rows))
-	group_summary_df_full = _build_group_profile_summary(sample_frames)
-	summary_df = _drop_clean_summary_columns(summary_df_full)
-	group_summary_df = _drop_clean_summary_columns(group_summary_df_full)
+	return (
+		order_flight_summary_columns(pd.DataFrame(all_rows)),
+		summarize_profiles_across_groups(sample_frames),
+	)
+
+
+def save_summary_outputs(
+	output_dir: Path,
+	flight_summary: pd.DataFrame,
+	group_summary: pd.DataFrame,
+) -> Tuple[Path, Path]:
+	summary_df = remove_internal_summary_columns(flight_summary)
+	group_summary_df = remove_internal_summary_columns(group_summary)
 	summary_path = output_dir / "vhe_profile_summary_all_windows.csv"
 	group_summary_path = output_dir / "vhe_profile_summary_by_group.csv"
 	output_dir.mkdir(parents=True, exist_ok=True)
 	summary_df.to_csv(summary_path, index=False)
 	group_summary_df.to_csv(group_summary_path, index=False)
+	return summary_path, group_summary_path
 
+
+def print_summary_tables(
+	flight_summary: pd.DataFrame,
+	group_summary: pd.DataFrame,
+	summary_path: Path,
+	group_summary_path: Path,
+) -> None:
 	print("")
 	print(f"Saved combined VHE profile summary to {summary_path}")
 	print(f"Saved AI/RAW profile summary to {group_summary_path}")
 	print("")
 	print("AI/RAW rolled-up summary:")
 	print(
-		group_summary_df_full[
+		group_summary[
 			[
 				"group",
 				"profile_label",
@@ -540,7 +565,7 @@ def main() -> None:
 	print("")
 	print("Per-flight summary:")
 	print(
-		summary_df_full[
+		flight_summary[
 			[
 				"group",
 				"flight",
@@ -555,5 +580,23 @@ def main() -> None:
 	)
 
 
+def run() -> None:
+	args = parse_arguments()
+	output_dir = Path(args.out_dir)
+	groups = select_evaluation_groups(args)
+	flight_summary, group_summary = process_evaluation_groups(groups, output_dir, args)
+	summary_path, group_summary_path = save_summary_outputs(
+		output_dir,
+		flight_summary,
+		group_summary,
+	)
+	print_summary_tables(
+		flight_summary,
+		group_summary,
+		summary_path,
+		group_summary_path,
+	)
+
+
 if __name__ == "__main__":
-	main()
+	run()
