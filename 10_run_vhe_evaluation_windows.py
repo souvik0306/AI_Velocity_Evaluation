@@ -9,26 +9,26 @@ import pandas as pd
 
 
 AI_WINDOWS = {
-	1: (36.67, 70.11),
-	2: (37.12, 73.13),
-	3: (37.55, 68.79),
-	4: (34.63, 63.98),
-	5: (33.57, 66.56),
-	6: (32.35, 64.76),
-	7: (33.98, 68.48),
-	8: (36.93, 68.40),
+	1: (36.67, 46.67),
+	2: (37.12, 47.12),
+	3: (37.55, 47.55),
+	4: (34.63, 44.63),
+	5: (33.57, 43.57),
+	6: (32.35, 42.35),
+	7: (33.98, 43.98),
+	8: (36.93, 46.93),
 }
 
 RAW_WINDOWS = {
-	1: (61.86, 87.66),
-	3: (118.44, 161.29),
-	4: (37.97, 75.38),
-	5: (30.37, 63.64),
-	6: (38.23, 67.16),
-	7: (42.09, 71.53),
-	8: (34.59, 59.24),
-	9: (36.91, 68.46),
-	10: (35.02, 65.28),
+	1: (61.86, 71.86),
+	3: (118.44, 128.44),
+	4: (37.97, 47.97),
+	5: (30.37, 40.37),
+	6: (38.23, 48.23),
+	7: (42.09, 52.09),
+	8: (34.59, 44.59),
+	9: (36.91, 46.91),
+	10: (35.02, 45.02),
 }
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -168,7 +168,7 @@ def calculate_and_save_vhe(est_window_path: Path, gt_window_path: Path) -> Tuple
 	gt_df = VHE._load_velocity_csv(gt_window_path, VHE.REQUIRED_COLS)
 	merged = VHE._merge_velocity_data(est_df, gt_df)
 	samples = VHE._compute_sample_metrics(merged)
-	summary = VHE._summarize_profiles(samples)
+	summary = VHE._summarize_window(samples)
 
 	samples_path = est_window_path.with_name(f"{est_window_path.stem}_vhe_samples{est_window_path.suffix}")
 	summary_path = est_window_path.with_name(f"{est_window_path.stem}_vhe_summary{est_window_path.suffix}")
@@ -273,13 +273,6 @@ def plot_horizontal_velocity(est_window_path: Path, gt_window_path: Path, group:
 	ax.plot(rel_time, est_vxy, label="Estimate horizontal speed", color="#1f77b4", linewidth=2.3)
 	ax.plot(rel_time, gt_vxy, label="GT horizontal speed", color="#d62728", linewidth=2.3, alpha=0.9)
 
-	for speed, color, label in (
-		(0.2, "#ff0000", "low start 0.2 m/s"),
-		(0.5, "#00a000", "medium start 0.5 m/s"),
-		(2.0, "#0040ff", "high start 2.0 m/s"),
-	):
-		ax.axhline(speed, color=color, linestyle="--", linewidth=1.2, alpha=0.75, label=label)
-
 	ax.set_title(f"{group} {flight_name} Horizontal Velocity Before VHE Calculation", fontsize=15)
 	ax.set_xlabel("time from evaluation window start (s)", fontsize=13)
 	ax.set_ylabel("horizontal speed sqrt(v_x^2 + v_y^2) (m/s)", fontsize=13)
@@ -289,7 +282,7 @@ def plot_horizontal_velocity(est_window_path: Path, gt_window_path: Path, group:
 	ax.xaxis.set_minor_locator(AutoMinorLocator(2))
 	ax.yaxis.set_major_locator(MaxNLocator(nbins=8))
 	ax.yaxis.set_minor_locator(AutoMinorLocator(2))
-	ax.legend(loc="best", ncol=2, fontsize=9)
+	ax.legend(loc="best", fontsize=9)
 	fig.tight_layout()
 	fig.savefig(out_path, dpi=300, bbox_inches="tight")
 	plt.close(fig)
@@ -301,29 +294,14 @@ def summarize_samples_by_group(
 	group: str,
 ) -> List[Dict[str, object]]:
 	rows = []
-	for profile, spec in VHE.PROFILE_SPECS.items():
-		profile_df = samples_df[samples_df["speed_profile"] == profile]
-		total = int(len(profile_df))
-		passing = int(profile_df["sample_pass"].sum()) if total else 0
-		rows.append(
-			{
-				"group": group,
-				"profile": profile,
-				"profile_label": spec["label"],
-				"gt_speed_range_mps": VHE._format_speed_range(spec),
-				"heading_limit_deg": spec["heading_limit_deg"],
-				"magnitude_limit_pct": spec["mag_limit_pct"],
-				"samples": total,
-				"passing_samples": passing,
-				"pass_pct": passing / total * 100.0 if total else float("nan"),
-				"avg_heading_error_deg": profile_df["heading_error_deg"].mean(),
-				"avg_magnitude_error_pct": profile_df["magnitude_error_pct"].mean(),
-			}
-		)
+	for _, row in VHE._summarize_window(samples_df).iterrows():
+		record = row.to_dict()
+		record["group"] = group
+		rows.append(record)
 	return rows
 
 
-def summarize_profiles_across_groups(sample_frames: List[pd.DataFrame]) -> pd.DataFrame:
+def summarize_windows_across_groups(sample_frames: List[pd.DataFrame]) -> pd.DataFrame:
 	if not sample_frames:
 		return pd.DataFrame()
 
@@ -412,19 +390,19 @@ def order_flight_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 	front = [
 		"group",
 		"flight",
-		"profile",
-		"profile_label",
 		"window_start_s",
 		"window_end_s",
 		"window_duration_s",
-		"gt_speed_range_mps",
-		"heading_limit_deg",
-		"magnitude_limit_pct",
 		"samples",
-		"passing_samples",
-		"pass_pct",
-		"avg_heading_error_deg",
+		"valid_heading_samples",
+		"valid_magnitude_samples",
+		"heading_p90_limit_deg",
+		"p90_heading_error_deg",
+		"heading_pass",
+		"avg_magnitude_error_limit_pct",
 		"avg_magnitude_error_pct",
+		"magnitude_pass",
+		"window_pass",
 	]
 	return df[[col for col in front if col in df.columns] + [col for col in df.columns if col not in front]]
 
@@ -432,31 +410,27 @@ def order_flight_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 def order_group_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 	front = [
 		"group",
-		"profile",
-		"profile_label",
-		"gt_speed_range_mps",
-		"heading_limit_deg",
-		"magnitude_limit_pct",
 		"samples",
-		"passing_samples",
-		"pass_pct",
-		"avg_heading_error_deg",
+		"valid_heading_samples",
+		"valid_magnitude_samples",
+		"heading_p90_limit_deg",
+		"p90_heading_error_deg",
+		"heading_pass",
+		"avg_magnitude_error_limit_pct",
 		"avg_magnitude_error_pct",
+		"magnitude_pass",
+		"window_pass",
 	]
 	return df[[col for col in front if col in df.columns] + [col for col in df.columns if col not in front]]
 
 
 def remove_internal_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
-	drop_cols = [
-		"profile",
-		"profile_label",
-	]
-	return df.drop(columns=[col for col in drop_cols if col in df.columns])
+	return df.copy()
 
 
 def parse_arguments() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
-		description="Run the clean, align, window, plot, and VHE evaluation for the 31st July AI/RAW windows.",
+		description="Run the clean, align, 10s window, plot, and VHE evaluation for the 31st July AI/RAW windows.",
 	)
 	parser.add_argument("--ai_dir", default="31st_July_AI", help="Source directory for AI CSVs")
 	parser.add_argument("--raw_dir", default="31st_July_RAW", help="Source directory for RAW CSVs")
@@ -519,7 +493,7 @@ def process_evaluation_groups(
 
 	return (
 		order_flight_summary_columns(pd.DataFrame(all_rows)),
-		summarize_profiles_across_groups(sample_frames),
+		summarize_windows_across_groups(sample_frames),
 	)
 
 
@@ -530,8 +504,8 @@ def save_summary_outputs(
 ) -> Tuple[Path, Path]:
 	summary_df = remove_internal_summary_columns(flight_summary)
 	group_summary_df = remove_internal_summary_columns(group_summary)
-	summary_path = output_dir / "vhe_profile_summary_all_windows.csv"
-	group_summary_path = output_dir / "vhe_profile_summary_by_group.csv"
+	summary_path = output_dir / "vhe_summary_all_windows.csv"
+	group_summary_path = output_dir / "vhe_summary_by_group.csv"
 	output_dir.mkdir(parents=True, exist_ok=True)
 	summary_df.to_csv(summary_path, index=False)
 	group_summary_df.to_csv(group_summary_path, index=False)
@@ -545,20 +519,24 @@ def print_summary_tables(
 	group_summary_path: Path,
 ) -> None:
 	print("")
-	print(f"Saved combined VHE profile summary to {summary_path}")
-	print(f"Saved AI/RAW profile summary to {group_summary_path}")
+	print(f"Saved combined VHE summary to {summary_path}")
+	print(f"Saved AI/RAW VHE summary to {group_summary_path}")
 	print("")
 	print("AI/RAW rolled-up summary:")
 	print(
 		group_summary[
 			[
 				"group",
-				"profile_label",
 				"samples",
-				"passing_samples",
-				"pass_pct",
-				"avg_heading_error_deg",
+				"valid_heading_samples",
+				"valid_magnitude_samples",
+				"heading_p90_limit_deg",
+				"p90_heading_error_deg",
+				"heading_pass",
+				"avg_magnitude_error_limit_pct",
 				"avg_magnitude_error_pct",
+				"magnitude_pass",
+				"window_pass",
 			]
 		].to_string(index=False)
 	)
@@ -569,12 +547,16 @@ def print_summary_tables(
 			[
 				"group",
 				"flight",
-				"profile_label",
 				"samples",
-				"passing_samples",
-				"pass_pct",
-				"avg_heading_error_deg",
+				"valid_heading_samples",
+				"valid_magnitude_samples",
+				"heading_p90_limit_deg",
+				"p90_heading_error_deg",
+				"heading_pass",
+				"avg_magnitude_error_limit_pct",
 				"avg_magnitude_error_pct",
+				"magnitude_pass",
+				"window_pass",
 			]
 		].to_string(index=False)
 	)

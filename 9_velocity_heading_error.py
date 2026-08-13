@@ -2,39 +2,15 @@
 
 import argparse
 from pathlib import Path
-from typing import Dict, Iterable, Tuple
+from typing import Iterable, Tuple
 
 import numpy as np
 import pandas as pd
 
 
 REQUIRED_COLS = ["time", "vel_x", "vel_y"]
-PROFILE_SPECS = {
-	"low": {
-		"label": "Low speed",
-		"min_speed": 0.2,
-		"max_speed": 0.5,
-		"include_min": True,
-		"heading_limit_deg": 60.0,
-		"mag_limit_pct": 100.0,
-	},
-	"medium": {
-		"label": "Medium speed",
-		"min_speed": 0.5,
-		"max_speed": 2.0,
-		"include_min": True,
-		"heading_limit_deg": 30.0,
-		"mag_limit_pct": 50.0,
-	},
-	"high": {
-		"label": "High speed",
-		"min_speed": 2.0,
-		"max_speed": 5.0,
-		"include_min": True,
-		"heading_limit_deg": 5.0,
-		"mag_limit_pct": 30.0,
-	},
-}
+HEADING_P90_LIMIT_DEG = 40.0
+AVG_MAGNITUDE_ERROR_LIMIT_PCT = 40.0
 
 
 def _load_velocity_csv(path: Path, required_cols: Iterable[str]) -> pd.DataFrame:
@@ -63,14 +39,6 @@ def _merge_velocity_data(est_df: pd.DataFrame, gt_df: pd.DataFrame) -> pd.DataFr
 	if merged.empty:
 		raise ValueError("No overlapping timestamps between estimate and GT CSVs")
 	return merged.sort_values("time").reset_index(drop=True)
-
-
-def _profile_mask(gt_speed_xy: np.ndarray, spec: Dict[str, float]) -> np.ndarray:
-	if spec["include_min"]:
-		min_mask = gt_speed_xy >= spec["min_speed"]
-	else:
-		min_mask = gt_speed_xy > spec["min_speed"]
-	return min_mask & (gt_speed_xy < spec["max_speed"])
 
 
 def _compute_sample_metrics(merged: pd.DataFrame) -> pd.DataFrame:
@@ -104,92 +72,71 @@ def _compute_sample_metrics(merged: pd.DataFrame) -> pd.DataFrame:
 	result["gt_speed_xy"] = gt_speed_xy
 	result["heading_error_deg"] = heading_error_deg
 	result["magnitude_error_pct"] = magnitude_error_pct
-	result["speed_profile"] = "out_of_range"
-	result["heading_pass"] = False
-	result["magnitude_pass"] = False
-	result["sample_pass"] = False
-
-	for profile, spec in PROFILE_SPECS.items():
-		mask = _profile_mask(gt_speed_xy, spec)
-		result.loc[mask, "speed_profile"] = profile
-		result.loc[mask, "heading_pass"] = (
-			result.loc[mask, "heading_error_deg"] < spec["heading_limit_deg"]
-		).fillna(False)
-		result.loc[mask, "magnitude_pass"] = (
-			result.loc[mask, "magnitude_error_pct"] < spec["mag_limit_pct"]
-		).fillna(False)
-		result.loc[mask, "sample_pass"] = (
-			result.loc[mask, "heading_pass"] & result.loc[mask, "magnitude_pass"]
-		)
 
 	return result
 
 
-def _summarize_profiles(samples: pd.DataFrame) -> pd.DataFrame:
-	rows = []
-	for profile, spec in PROFILE_SPECS.items():
-		profile_df = samples[samples["speed_profile"] == profile]
-		total = int(len(profile_df))
-		passing = int(profile_df["sample_pass"].sum()) if total else 0
-		pass_pct = passing / total * 100.0 if total else float("nan")
-		rows.append(
+def _nearest_rank_percentile(values: pd.Series, percentile: float) -> float:
+	valid_values = np.sort(pd.to_numeric(values, errors="coerce").dropna().to_numpy(dtype=float))
+	if len(valid_values) == 0:
+		return float("nan")
+	index = int(np.ceil(percentile / 100.0 * len(valid_values))) - 1
+	index = min(max(index, 0), len(valid_values) - 1)
+	return float(valid_values[index])
+
+
+def _summarize_window(samples: pd.DataFrame) -> pd.DataFrame:
+	p90_heading = _nearest_rank_percentile(samples["heading_error_deg"], 90.0)
+	avg_magnitude_pct = pd.to_numeric(samples["magnitude_error_pct"], errors="coerce").mean()
+	heading_pass = bool(p90_heading < HEADING_P90_LIMIT_DEG) if np.isfinite(p90_heading) else False
+	magnitude_pass = (
+		bool(avg_magnitude_pct < AVG_MAGNITUDE_ERROR_LIMIT_PCT)
+		if np.isfinite(avg_magnitude_pct)
+		else False
+	)
+
+	return pd.DataFrame(
+		[
 			{
-				"profile": profile,
-				"profile_label": spec["label"],
-				"gt_speed_range_mps": _format_speed_range(spec),
-				"heading_limit_deg": spec["heading_limit_deg"],
-				"magnitude_limit_pct": spec["mag_limit_pct"],
-				"samples": total,
-				"passing_samples": passing,
-				"pass_pct": pass_pct,
-				"avg_heading_error_deg": profile_df["heading_error_deg"].mean(),
-				"avg_magnitude_error_pct": profile_df["magnitude_error_pct"].mean(),
+				"samples": int(len(samples)),
+				"valid_heading_samples": int(samples["heading_error_deg"].notna().sum()),
+				"valid_magnitude_samples": int(samples["magnitude_error_pct"].notna().sum()),
+				"heading_p90_limit_deg": HEADING_P90_LIMIT_DEG,
+				"p90_heading_error_deg": p90_heading,
+				"heading_pass": heading_pass,
+				"avg_magnitude_error_limit_pct": AVG_MAGNITUDE_ERROR_LIMIT_PCT,
+				"avg_magnitude_error_pct": avg_magnitude_pct,
+				"magnitude_pass": magnitude_pass,
+				"window_pass": heading_pass and magnitude_pass,
 			}
-		)
-	return pd.DataFrame(rows)
-
-
-def _format_speed_range(spec: Dict[str, float]) -> str:
-	left = "<=" if spec["include_min"] else "<"
-	return f"{spec['min_speed']:g} {left} v_gt_xy < {spec['max_speed']:g}"
+		]
+	)
 
 
 def _print_summary(summary: pd.DataFrame, samples: pd.DataFrame) -> None:
 	print("Velocity Heading Error Summary")
 	print("Formula uses horizontal x/y velocity components.")
 	print("")
-	for _, row in summary.iterrows():
-		pass_pct = row["pass_pct"]
-		avg_heading = row["avg_heading_error_deg"]
-		avg_mag = row["avg_magnitude_error_pct"]
-		print(f"{row['profile_label']} ({row['gt_speed_range_mps']} m/s)")
-		print(
-			"  Requirement: "
-			f"heading < {row['heading_limit_deg']:.1f} deg, "
-			f"magnitude < {row['magnitude_limit_pct']:.1f}%"
-		)
-		print(
-			"  Pass: "
-			f"{row['passing_samples']}/{row['samples']} "
-			f"({pass_pct:.2f}%)"
-			if np.isfinite(pass_pct)
-			else "  Pass: 0/0 (nan%)"
-		)
-		print(
-			"  Averages: "
-			f"heading={avg_heading:.3f} deg, "
-			f"magnitude={avg_mag:.3f}%"
-			if np.isfinite(avg_heading) and np.isfinite(avg_mag)
-			else "  Averages: heading=nan deg, magnitude=nan%"
-		)
-		print("")
-
-	out_of_range = int((samples["speed_profile"] == "out_of_range").sum())
-	if out_of_range:
-		print(
-			"Samples outside evaluated GT speed ranges "
-			f"(v_gt_xy < 0.2 or v_gt_xy >= 5 m/s): {out_of_range}"
-		)
+	row = summary.iloc[0]
+	print(f"Full window samples: {int(row['samples'])}")
+	print(
+		"Requirement: "
+		f"P90 heading error < {row['heading_p90_limit_deg']:.1f} deg AND "
+		f"average magnitude error < {row['avg_magnitude_error_limit_pct']:.1f}%"
+	)
+	print(
+		"P90 heading error: "
+		f"{row['p90_heading_error_deg']:.3f} deg, heading_pass={row['heading_pass']}"
+		if np.isfinite(row["p90_heading_error_deg"])
+		else f"P90 heading error: nan deg, heading_pass={row['heading_pass']}"
+	)
+	print(
+		"Average magnitude error: "
+		f"{row['avg_magnitude_error_pct']:.3f}%, magnitude_pass={row['magnitude_pass']}"
+		if np.isfinite(row["avg_magnitude_error_pct"])
+		else f"Average magnitude error: nan%, magnitude_pass={row['magnitude_pass']}"
+	)
+	print(f"Window pass: {row['window_pass']}")
 
 
 def _derive_output_paths(est_path: Path) -> Tuple[Path, Path]:
@@ -203,18 +150,18 @@ def main() -> None:
 	parser = argparse.ArgumentParser(
 		description=(
 			"Calculate horizontal velocity heading error and magnitude error, "
-			"then evaluate samples by Vicon/GT horizontal speed profile."
+			"then evaluate the full window with fixed p90 heading and average magnitude limits."
 		),
 	)
 	parser.add_argument("--est_csv", required=True, help="Windowed estimate velocity CSV")
 	parser.add_argument("--gt_csv", required=True, help="Windowed aligned GT velocity CSV")
 	parser.add_argument(
 		"--out_samples_csv",
-		help="Optional output CSV with per-sample heading/magnitude errors and pass flags",
+		help="Optional output CSV with per-sample heading and magnitude errors",
 	)
 	parser.add_argument(
 		"--out_summary_csv",
-		help="Optional output CSV with per-profile pass percentages and averages",
+		help="Optional output CSV with full-window VHE summary metrics",
 	)
 	args = parser.parse_args()
 
@@ -233,7 +180,7 @@ def main() -> None:
 	gt_df = _load_velocity_csv(gt_path, REQUIRED_COLS)
 	merged = _merge_velocity_data(est_df, gt_df)
 	samples = _compute_sample_metrics(merged)
-	summary = _summarize_profiles(samples)
+	summary = _summarize_window(samples)
 
 	samples_path.parent.mkdir(parents=True, exist_ok=True)
 	summary_path.parent.mkdir(parents=True, exist_ok=True)
@@ -242,7 +189,7 @@ def main() -> None:
 
 	_print_summary(summary, samples)
 	print(f"Saved per-sample VHE results to {samples_path}")
-	print(f"Saved profile VHE summary to {summary_path}")
+	print(f"Saved VHE summary to {summary_path}")
 
 
 if __name__ == "__main__":
