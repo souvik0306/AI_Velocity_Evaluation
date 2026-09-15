@@ -10,7 +10,8 @@ import numpy as np
 import pandas as pd
 
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = Path(__file__).resolve().parents[2]
+PIPELINE_DIR = SCRIPT_DIR / "scripts" / "pipeline"
 DEFAULT_BASE_DIR = SCRIPT_DIR / "28th July"
 DEFAULT_VELOCITY_BOUNDS = ["vel_*:-8:8"]
 
@@ -64,7 +65,7 @@ DYNAMIC_CRITERIA = [
 
 
 def load_script_module(filename: str, module_name: str):
-	spec = importlib.util.spec_from_file_location(module_name, SCRIPT_DIR / filename)
+	spec = importlib.util.spec_from_file_location(module_name, PIPELINE_DIR / filename)
 	if spec is None or spec.loader is None:
 		raise ImportError(f"Could not load {filename}")
 	module = importlib.util.module_from_spec(spec)

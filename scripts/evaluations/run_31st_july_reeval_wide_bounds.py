@@ -11,7 +11,8 @@ import numpy as np
 import pandas as pd
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[2]
+PIPELINE_DIR = ROOT / "scripts" / "pipeline"
 VELOCITY_BOUND = "vel_*:-8:8"
 MIN_VELOCITY = -8.0
 MAX_VELOCITY = 8.0
@@ -73,7 +74,7 @@ def clean_and_align_source(source_dir: Path, flights: Iterable[int], log_path: P
 		run_command(
 			[
 				"python3",
-				str(ROOT / "3_vel_csv_dataset_cleaner.py"),
+				str(PIPELINE_DIR / "3_vel_csv_dataset_cleaner.py"),
 				"--est_csv",
 				str(est_csv),
 				"--gt_csv",
@@ -89,7 +90,7 @@ def clean_and_align_source(source_dir: Path, flights: Iterable[int], log_path: P
 		run_command(
 			[
 				"python3",
-				str(ROOT / "4_align_vel_csv.py"),
+				str(PIPELINE_DIR / "4_align_vel_csv.py"),
 				"--est_csv",
 				str(est_clean),
 				"--gt_csv",
@@ -120,7 +121,7 @@ def clip_and_score_window(
 		run_command(
 			[
 				"python3",
-				str(ROOT / "5_manual_relative_window_clipping.py"),
+				str(PIPELINE_DIR / "5_manual_relative_window_clipping.py"),
 				"--est_csv",
 				str(est_clean),
 				"--gt_csv",
@@ -138,7 +139,7 @@ def clip_and_score_window(
 		run_command(
 			[
 				"python3",
-				str(ROOT / "6_bias_zeroing_and_rmse.py"),
+				str(PIPELINE_DIR / "6_bias_zeroing_and_rmse.py"),
 				"--est_csv",
 				str(est_window),
 				"--gt_csv",

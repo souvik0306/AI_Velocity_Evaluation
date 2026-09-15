@@ -2,6 +2,7 @@
 
 import argparse
 import importlib.util
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -9,44 +10,53 @@ import numpy as np
 import pandas as pd
 
 
-SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_VELOCITY_BOUNDS = ["vel_*:-4:4"]
+SCRIPT_DIR = Path(__file__).resolve().parents[2]
+PIPELINE_DIR = SCRIPT_DIR / "scripts" / "pipeline"
+DEFAULT_VELOCITY_BOUNDS = ["vel_*:-8:8"]
 METRIC_REQUIRED_COLS = ["time", "vel_x", "vel_y"]
 
 
 AI_WINDOWS = {
-	"ai_10_20_35": (66.20, 76.20),
-	"ai_10_31_13": (59.65, 69.65),
-	"ai_10_34_48": (48.81, 58.81),
-	"ai_10_37_53": (45.39, 55.39),
-	"ai_10_40_49": (47.90, 57.90),
-	"ai_10_43_37": (41.65, 51.65),
-	"ai_10_46_31": (42.18, 52.18),
+	1: (36.67, 46.67),
+	2: (37.12, 47.12),
+	3: (37.55, 47.55),
+	4: (34.63, 44.63),
+	5: (33.57, 43.57),
+	6: (32.35, 42.35),
+	7: (33.98, 43.98),
+	8: (36.93, 46.93),
 }
 
-RAW_FLIGHT_LABELS_ALL = {
-	1: "raw_10_18_50",
-	2: "raw_10_21_43",
-	3: "raw_10_24_22",
-	4: "raw_10_29_23",
-	5: "raw_10_32_09",
-	6: "raw_10_35_00",
-	7: "raw_10_37_51",
+RAW_WINDOWS = {
+	1: (61.86, 71.86),
+	3: (118.44, 128.44),
+	4: (37.97, 47.97),
+	5: (30.37, 40.37),
+	6: (38.23, 48.23),
+	7: (42.09, 52.09),
+	8: (34.59, 44.59),
+	9: (36.91, 46.91),
+	10: (35.02, 45.02),
 }
 
-RAW_WINDOWS_ALL = {
-	"raw_10_18_50": (36.89, 46.89),
-	"raw_10_21_43": (38.09, 48.09),
-	"raw_10_24_22": (38.54, 48.54),
-	"raw_10_29_23": (42.35, 52.35),
-	"raw_10_32_09": (41.89, 51.89),
-	"raw_10_35_00": (37.46, 47.46),
-	"raw_10_37_51": (48.27, 58.27),
-}
+
+@dataclass(frozen=True)
+class SpeedRegime:
+	name: str
+	label: str
+	min_gt_speed_mps: float
+	max_gt_speed_mps: float
+
+
+SPEED_REGIMES = [
+	SpeedRegime("low_0_to_0p5", "0.0 <= GT horizontal speed < 0.5 m/s", 0.0, 0.5),
+	SpeedRegime("medium_0p5_to_2", "0.5 <= GT horizontal speed < 2 m/s", 0.5, 2.0),
+	SpeedRegime("high_2_to_5", "2 <= GT horizontal speed < 5 m/s", 2.0, 5.0),
+]
 
 
 def load_script_module(filename: str, module_name: str):
-	spec = importlib.util.spec_from_file_location(module_name, SCRIPT_DIR / filename)
+	spec = importlib.util.spec_from_file_location(module_name, PIPELINE_DIR / filename)
 	if spec is None or spec.loader is None:
 		raise ImportError(f"Could not load {filename}")
 	module = importlib.util.module_from_spec(spec)
@@ -62,11 +72,6 @@ def resolve_repo_path(value: str) -> Path:
 	if path.is_absolute():
 		return path
 	return SCRIPT_DIR / path
-
-
-def flight_stem_from_label(label: str) -> str:
-	_, hour, minute, second = label.split("_")
-	return f"flight_2026-07-01-{hour}-{minute}-{second}"
 
 
 def nearest_rank_percentile(values: pd.Series, percentile: float) -> float:
@@ -204,6 +209,17 @@ def merge_window_data(est_window_path: Path, gt_window_path: Path) -> pd.DataFra
 	return merged.sort_values("time").reset_index(drop=True)
 
 
+def assign_speed_regime(gt_abs_magnitude: np.ndarray) -> np.ndarray:
+	labels = np.full(len(gt_abs_magnitude), "outside_ge_5", dtype=object)
+	for regime in SPEED_REGIMES:
+		mask = (gt_abs_magnitude >= regime.min_gt_speed_mps) & (
+			gt_abs_magnitude < regime.max_gt_speed_mps
+		)
+		labels[mask] = regime.name
+	labels[~np.isfinite(gt_abs_magnitude)] = "invalid_gt_speed"
+	return labels
+
+
 def compute_sample_metrics(merged: pd.DataFrame) -> pd.DataFrame:
 	est_x = merged["vel_x_est"].to_numpy(dtype=float)
 	est_y = merged["vel_y_est"].to_numpy(dtype=float)
@@ -233,47 +249,78 @@ def compute_sample_metrics(merged: pd.DataFrame) -> pd.DataFrame:
 	samples["rel_time_s"] = samples["time"] - float(samples["time"].iloc[0])
 	samples["est_abs_magnitude_xy_mps"] = est_abs_magnitude
 	samples["gt_abs_magnitude_xy_mps"] = gt_abs_magnitude
+	samples["speed_regime"] = assign_speed_regime(gt_abs_magnitude)
 	samples["abs_magnitude_error_mps"] = abs_magnitude_error
 	samples["magnitude_error_pct"] = magnitude_error_pct
 	samples["heading_error_deg"] = heading_error_deg
 	return samples
 
 
-def summarize_samples(
+def summarize_regime(
 	samples: pd.DataFrame,
 	group: str,
-	eval_id: str,
-	flight_stem: str,
+	flight: str,
 	window: Tuple[float, float],
+	regime: SpeedRegime,
 ) -> Dict[str, object]:
+	regime_samples = samples[samples["speed_regime"] == regime.name]
+	total_window_samples = int(len(samples))
+	outside_ge_5_samples = int((samples["speed_regime"] == "outside_ge_5").sum())
+	invalid_gt_speed_samples = int((samples["speed_regime"] == "invalid_gt_speed").sum())
+
 	return {
 		"group": group,
-		"eval_id": eval_id,
-		"flight_stem": flight_stem,
+		"flight": flight,
 		"window_start_s": window[0],
 		"window_end_s": window[1],
 		"window_duration_s": window[1] - window[0],
-		"samples": int(len(samples)),
-		"valid_heading_samples": int(samples["heading_error_deg"].notna().sum()),
-		"valid_magnitude_samples": int(samples["magnitude_error_pct"].notna().sum()),
-		"mean_heading_error_deg": pd.to_numeric(samples["heading_error_deg"], errors="coerce").mean(),
-		"p90_heading_error_deg": nearest_rank_percentile(samples["heading_error_deg"], 90.0),
+		"speed_regime": regime.name,
+		"speed_regime_label": regime.label,
+		"regime_min_gt_speed_mps": regime.min_gt_speed_mps,
+		"regime_max_gt_speed_mps": regime.max_gt_speed_mps,
+		"total_window_samples": total_window_samples,
+		"outside_regimes_gt_speed_ge_5_samples": outside_ge_5_samples,
+		"invalid_gt_speed_samples": invalid_gt_speed_samples,
+		"samples_in_regime": int(len(regime_samples)),
+		"valid_heading_samples": int(regime_samples["heading_error_deg"].notna().sum()),
+		"valid_magnitude_samples": int(regime_samples["magnitude_error_pct"].notna().sum()),
+		"mean_heading_error_deg": pd.to_numeric(
+			regime_samples["heading_error_deg"], errors="coerce"
+		).mean(),
+		"p90_heading_error_deg": nearest_rank_percentile(regime_samples["heading_error_deg"], 90.0),
 		"avg_est_abs_magnitude_xy_mps": pd.to_numeric(
-			samples["est_abs_magnitude_xy_mps"], errors="coerce"
+			regime_samples["est_abs_magnitude_xy_mps"], errors="coerce"
 		).mean(),
 		"avg_gt_abs_magnitude_xy_mps": pd.to_numeric(
-			samples["gt_abs_magnitude_xy_mps"], errors="coerce"
+			regime_samples["gt_abs_magnitude_xy_mps"], errors="coerce"
 		).mean(),
 		"avg_abs_magnitude_error_mps": pd.to_numeric(
-			samples["abs_magnitude_error_mps"], errors="coerce"
+			regime_samples["abs_magnitude_error_mps"], errors="coerce"
 		).mean(),
-		"avg_magnitude_error_pct": pd.to_numeric(samples["magnitude_error_pct"], errors="coerce").mean(),
+		"avg_magnitude_error_pct": pd.to_numeric(
+			regime_samples["magnitude_error_pct"], errors="coerce"
+		).mean(),
 	}
 
 
-def summarize_rollup(samples: pd.DataFrame, group: str) -> Dict[str, object]:
-	row = summarize_samples(samples, group, "ALL_TRAJECTORIES", "ALL_TRAJECTORIES", (float("nan"), float("nan")))
-	row["trajectories"] = int(samples[["group", "eval_id"]].drop_duplicates().shape[0])
+def summarize_all_regimes(
+	samples: pd.DataFrame,
+	group: str,
+	flight: str,
+	window: Tuple[float, float],
+) -> List[Dict[str, object]]:
+	return [summarize_regime(samples, group, flight, window, regime) for regime in SPEED_REGIMES]
+
+
+def summarize_rollup_regime(samples: pd.DataFrame, group: str, regime: SpeedRegime) -> Dict[str, object]:
+	row = summarize_regime(
+		samples,
+		group,
+		"ALL_TRAJECTORIES",
+		(float("nan"), float("nan")),
+		regime,
+	)
+	row["trajectories"] = int(samples[["group", "flight"]].drop_duplicates().shape[0])
 	row.pop("window_start_s")
 	row.pop("window_end_s")
 	row.pop("window_duration_s")
@@ -283,12 +330,18 @@ def summarize_rollup(samples: pd.DataFrame, group: str) -> Dict[str, object]:
 def order_flight_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 	front = [
 		"group",
-		"eval_id",
-		"flight_stem",
+		"flight",
 		"window_start_s",
 		"window_end_s",
 		"window_duration_s",
-		"samples",
+		"speed_regime",
+		"speed_regime_label",
+		"regime_min_gt_speed_mps",
+		"regime_max_gt_speed_mps",
+		"total_window_samples",
+		"outside_regimes_gt_speed_ge_5_samples",
+		"invalid_gt_speed_samples",
+		"samples_in_regime",
 		"valid_heading_samples",
 		"valid_magnitude_samples",
 		"mean_heading_error_deg",
@@ -304,9 +357,16 @@ def order_flight_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 def order_rollup_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 	front = [
 		"group",
-		"eval_id",
+		"flight",
 		"trajectories",
-		"samples",
+		"speed_regime",
+		"speed_regime_label",
+		"regime_min_gt_speed_mps",
+		"regime_max_gt_speed_mps",
+		"total_window_samples",
+		"outside_regimes_gt_speed_ge_5_samples",
+		"invalid_gt_speed_samples",
+		"samples_in_regime",
 		"valid_heading_samples",
 		"valid_magnitude_samples",
 		"mean_heading_error_deg",
@@ -321,24 +381,24 @@ def order_rollup_summary_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def process_flight(
 	group: str,
-	eval_id: str,
+	flight: int,
 	window: Tuple[float, float],
 	source_dir: Path,
 	output_dir: Path,
 	args: argparse.Namespace,
-) -> Tuple[Dict[str, object], pd.DataFrame, Dict[str, object]]:
-	flight_stem = flight_stem_from_label(eval_id)
-	est_raw = source_dir / f"{flight_stem}_vel_est.csv"
-	gt_raw = source_dir / f"{flight_stem}_vel_gt.csv"
+) -> Tuple[List[Dict[str, object]], pd.DataFrame, Dict[str, object]]:
+	flight_name = f"flight_{flight}"
+	est_raw = source_dir / f"{flight_name}_vel_est.csv"
+	gt_raw = source_dir / f"{flight_name}_vel_gt.csv"
 	if not est_raw.exists():
 		raise FileNotFoundError(f"Estimate source CSV not found: {est_raw}")
 	if not gt_raw.exists():
 		raise FileNotFoundError(f"GT source CSV not found: {gt_raw}")
 
 	group_out = output_dir / group
-	est_clean = group_out / f"{eval_id}_vel_est_clean.csv"
-	gt_clean = group_out / f"{eval_id}_vel_gt_clean.csv"
-	gt_aligned = group_out / f"{eval_id}_vel_gt_clean_aligned.csv"
+	est_clean = group_out / f"{flight_name}_vel_est_clean.csv"
+	gt_clean = group_out / f"{flight_name}_vel_gt_clean.csv"
+	gt_aligned = group_out / f"{flight_name}_vel_gt_clean_aligned.csv"
 
 	_, est_pruned, est_filtered = clean_velocity_csv(
 		est_raw,
@@ -364,20 +424,18 @@ def process_flight(
 	est_window, gt_window = clip_velocity_window(est_clean, gt_aligned, window[0], window[1])
 
 	samples = compute_sample_metrics(merge_window_data(est_window, gt_window))
-	samples.insert(0, "flight_stem", flight_stem)
-	samples.insert(0, "eval_id", eval_id)
+	samples.insert(0, "flight", flight_name)
 	samples.insert(0, "group", group)
 	samples["window_start_s"] = window[0]
 	samples["window_end_s"] = window[1]
 
-	samples_path = group_out / f"{eval_id}_10s_heading_magnitude_samples.csv"
+	samples_path = group_out / f"{flight_name}_10s_speed_regime_heading_magnitude_samples.csv"
 	samples.to_csv(samples_path, index=False)
-	summary = summarize_samples(samples, group, eval_id, flight_stem, window)
+	rows = summarize_all_regimes(samples, group, flight_name, window)
 
 	cleaning_record = {
 		"group": group,
-		"eval_id": eval_id,
-		"flight_stem": flight_stem,
+		"flight": flight_name,
 		"est_rows_cleaned": int(len(pd.read_csv(est_clean))),
 		"gt_rows_cleaned": int(len(pd.read_csv(gt_clean))),
 	}
@@ -387,54 +445,20 @@ def process_flight(
 		cleaning_record[f"gt_pruned_{col}"] = gt_pruned.get(col, 0)
 		cleaning_record[f"gt_median_filtered_{col}"] = gt_filtered.get(col, 0)
 
-	return summary, samples, cleaning_record
+	return rows, samples, cleaning_record
 
 
-def parse_raw_flights(value: str) -> List[int]:
-	flights: List[int] = []
-	for item in value.split(","):
-		item = item.strip()
-		if not item:
-			continue
-		try:
-			flight = int(item)
-		except ValueError as exc:
-			raise ValueError(f"Invalid RAW flight number '{item}' in --raw_flights") from exc
-		if flight not in RAW_FLIGHT_LABELS_ALL:
-			valid = ", ".join(str(key) for key in sorted(RAW_FLIGHT_LABELS_ALL))
-			raise ValueError(f"RAW flight {flight} is not valid. Use one or more of: {valid}")
-		if flight not in flights:
-			flights.append(flight)
-	if not flights:
-		raise ValueError("--raw_flights must include at least one RAW flight number")
-	return flights
-
-
-def select_raw_windows(raw_flights: List[int]) -> Dict[str, Tuple[float, float]]:
-	return {
-		RAW_FLIGHT_LABELS_ALL[flight]: RAW_WINDOWS_ALL[RAW_FLIGHT_LABELS_ALL[flight]]
-		for flight in raw_flights
-	}
-
-
-def select_groups(args: argparse.Namespace) -> List[Tuple[str, Path, Dict[str, Tuple[float, float]]]]:
+def select_groups(args: argparse.Namespace) -> List[Tuple[str, Path, Dict[int, Tuple[float, float]]]]:
 	groups = []
 	if args.group in {"all", "AI"}:
 		groups.append(("AI", resolve_repo_path(args.ai_dir), AI_WINDOWS))
 	if args.group in {"all", "RAW"}:
-		groups.append(("RAW", resolve_repo_path(args.raw_dir), select_raw_windows(args.raw_flights)))
+		groups.append(("RAW", resolve_repo_path(args.raw_dir), RAW_WINDOWS))
 	return groups
 
 
-def describe_groups(groups: List[Tuple[str, Path, Dict[str, Tuple[float, float]]]]) -> str:
-	parts = []
-	for group, _, windows in groups:
-		parts.append(f"{group}: {', '.join(windows.keys())}")
-	return "; ".join(parts)
-
-
 def process_groups(
-	groups: List[Tuple[str, Path, Dict[str, Tuple[float, float]]]],
+	groups: List[Tuple[str, Path, Dict[int, Tuple[float, float]]]],
 	output_dir: Path,
 	args: argparse.Namespace,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
@@ -443,17 +467,17 @@ def process_groups(
 	sample_frames: List[pd.DataFrame] = []
 
 	for group, source_dir, windows in groups:
-		for eval_id, window in windows.items():
-			print(f"Processing {group} {eval_id}: {window[0]:.2f} -> {window[1]:.2f} s")
-			summary, samples, cleaning_record = process_flight(
+		for flight, window in windows.items():
+			print(f"Processing {group} flight_{flight}: {window[0]:.2f} -> {window[1]:.2f} s")
+			rows, samples, cleaning_record = process_flight(
 				group,
-				eval_id,
+				flight,
 				window,
 				source_dir,
 				output_dir,
 				args,
 			)
-			flight_rows.append(summary)
+			flight_rows.extend(rows)
 			sample_frames.append(samples)
 			cleaning_rows.append(cleaning_record)
 
@@ -461,10 +485,12 @@ def process_groups(
 		raise SystemExit("No flights processed")
 
 	all_samples = pd.concat(sample_frames, ignore_index=True)
-	rollup_rows = []
+	rollup_rows: List[Dict[str, object]] = []
 	for group, group_samples in all_samples.groupby("group", sort=False):
-		rollup_rows.append(summarize_rollup(group_samples, group))
-	rollup_rows.append(summarize_rollup(all_samples, "ALL"))
+		for regime in SPEED_REGIMES:
+			rollup_rows.append(summarize_rollup_regime(group_samples, group, regime))
+	for regime in SPEED_REGIMES:
+		rollup_rows.append(summarize_rollup_regime(all_samples, "ALL", regime))
 
 	return (
 		order_flight_summary_columns(pd.DataFrame(flight_rows)),
@@ -480,33 +506,31 @@ def save_outputs(
 	cleaning_summary: pd.DataFrame,
 ) -> Tuple[Path, Path, Path]:
 	output_dir.mkdir(parents=True, exist_ok=True)
-	flight_summary_path = output_dir / "28th_july_10s_heading_magnitude_summary_by_flight.csv"
-	rollup_summary_path = output_dir / "28th_july_10s_heading_magnitude_summary_by_group.csv"
-	cleaning_summary_path = output_dir / "28th_july_10s_velocity_cleaning_summary.csv"
+	flight_summary_path = output_dir / "31st_july_10s_speed_regime_heading_magnitude_summary_by_flight.csv"
+	rollup_summary_path = output_dir / "31st_july_10s_speed_regime_heading_magnitude_summary_by_group.csv"
+	cleaning_summary_path = output_dir / "31st_july_10s_speed_regime_velocity_cleaning_summary.csv"
 	flight_summary.to_csv(flight_summary_path, index=False)
 	rollup_summary.to_csv(rollup_summary_path, index=False)
 	cleaning_summary.to_csv(cleaning_summary_path, index=False)
 	return flight_summary_path, rollup_summary_path, cleaning_summary_path
 
 
-def write_readme(output_dir: Path, selection_description: str) -> Path:
+def write_readme(output_dir: Path) -> Path:
 	readme_path = output_dir / "README.md"
 	readme_path.write_text(
-		"# 28th July 10s Heading and Magnitude Metrics\n\n"
-		f"This run includes {selection_description}. "
-		"Each trajectory is cleaned with velocity bounds `-4 <= vel_* <= 4 m/s`, "
+		"# 31st July 10s Speed-Regime Heading and Magnitude Metrics\n\n"
+		"Each trajectory is cleaned with velocity bounds `-8 <= vel_* <= 8 m/s`, "
 		"GT is latency-aligned to estimate time, then the provided 10s evaluation window is clipped. "
-		"Heading and magnitude metrics use horizontal velocity only: `vel_x` and `vel_y`.\n\n"
-		"`mean_heading_error_deg`: Average angle difference between estimate and GT horizontal velocity vectors.\n\n"
-		"`p90_heading_error_deg`: Nearest-rank 90th percentile of per-sample heading error in degrees.\n\n"
-		"`avg_est_abs_magnitude_xy_mps`: Average estimate horizontal speed, calculated per sample as "
-		"`sqrt(vel_x_est^2 + vel_y_est^2)`.\n\n"
-		"`avg_gt_abs_magnitude_xy_mps`: Average GT horizontal speed, calculated per sample as "
-		"`sqrt(vel_x_gt^2 + vel_y_gt^2)`.\n\n"
-		"`avg_abs_magnitude_error_mps`: Average absolute horizontal speed difference, calculated per sample as "
-		"`abs(est_abs_magnitude_xy - gt_abs_magnitude_xy)`.\n\n"
-		"`avg_magnitude_error_pct`: Average percentage horizontal speed error, calculated per sample as "
-		"`abs(est_abs_magnitude_xy - gt_abs_magnitude_xy) / gt_abs_magnitude_xy * 100`.\n",
+		"Regimes are assigned from GT horizontal speed: `sqrt(vel_x_gt^2 + vel_y_gt^2)`.\n\n"
+		"Regimes: `low_0_to_0p5` is `0.0 <= GT speed < 0.5 m/s`; "
+		"`medium_0p5_to_2` is `0.5 <= GT speed < 2 m/s`; "
+		"`high_2_to_5` is `2 <= GT speed < 5 m/s`.\n\n"
+		"`mean_heading_error_deg`: Average angle difference between estimate and GT horizontal velocity vectors within the regime.\n\n"
+		"`p90_heading_error_deg`: Nearest-rank 90th percentile of per-sample heading error in degrees within the regime.\n\n"
+		"`avg_est_abs_magnitude_xy_mps`: Average estimate horizontal speed within the regime, calculated per sample as `sqrt(vel_x_est^2 + vel_y_est^2)`.\n\n"
+		"`avg_gt_abs_magnitude_xy_mps`: Average GT horizontal speed within the regime, calculated per sample as `sqrt(vel_x_gt^2 + vel_y_gt^2)`.\n\n"
+		"`avg_abs_magnitude_error_mps`: Average absolute horizontal speed difference within the regime, calculated per sample as `abs(est_abs_magnitude_xy - gt_abs_magnitude_xy)`.\n\n"
+		"`avg_magnitude_error_pct`: Average percentage horizontal speed error within the regime, calculated per sample as `abs(est_abs_magnitude_xy - gt_abs_magnitude_xy) / gt_abs_magnitude_xy * 100`.\n",
 		encoding="utf-8",
 	)
 	return readme_path
@@ -522,17 +546,19 @@ def print_summary(
 ) -> None:
 	columns = [
 		"group",
-		"eval_id",
-		"samples",
+		"speed_regime",
+		"trajectories",
+		"samples_in_regime",
 		"mean_heading_error_deg",
 		"p90_heading_error_deg",
 		"avg_abs_magnitude_error_mps",
 		"avg_magnitude_error_pct",
 	]
-	rollup_columns = [
+	per_flight_columns = [
 		"group",
-		"trajectories",
-		"samples",
+		"flight",
+		"speed_regime",
+		"samples_in_regime",
 		"mean_heading_error_deg",
 		"p90_heading_error_deg",
 		"avg_abs_magnitude_error_mps",
@@ -540,56 +566,41 @@ def print_summary(
 	]
 
 	print("")
-	print(f"Saved per-flight summary to {flight_summary_path}")
-	print(f"Saved AI/RAW/ALL summary to {rollup_summary_path}")
+	print(f"Saved per-flight regime summary to {flight_summary_path}")
+	print(f"Saved AI/RAW/ALL regime summary to {rollup_summary_path}")
 	print(f"Saved cleaning summary to {cleaning_summary_path}")
 	print(f"Saved README to {readme_path}")
 	print("")
-	print("AI/RAW/ALL rolled-up summary:")
-	print(rollup_summary[rollup_columns].to_string(index=False))
+	print("AI/RAW/ALL rolled-up summary by speed regime:")
+	print(rollup_summary[columns].to_string(index=False))
 	print("")
-	print("Per-flight summary:")
-	print(flight_summary[columns].to_string(index=False))
+	print("Per-flight summary by speed regime:")
+	print(flight_summary[per_flight_columns].to_string(index=False))
 
 
 def parse_arguments() -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
 		description=(
-			"Run all 28th July AI/RAW trajectories through the 10s evaluation windows, "
-			"clean velocity to +/-4 m/s, and calculate heading plus magnitude metrics."
+			"Run all 31st July AI/RAW trajectories through 10s evaluation windows, "
+			"clean velocity to +/-8 m/s, split samples by GT horizontal speed regime, "
+			"and calculate heading plus magnitude metrics."
 		),
 	)
-	parser.add_argument(
-		"--ai_dir",
-		default="28th July/28th_July_AI_rosbags",
-		help="Source directory for AI velocity CSVs",
-	)
-	parser.add_argument(
-		"--raw_dir",
-		default="28th July/28th_July_RAW_rosbags",
-		help="Source directory for RAW velocity CSVs",
-	)
+	parser.add_argument("--ai_dir", default="31st_July_AI", help="Source directory for AI velocity CSVs")
+	parser.add_argument("--raw_dir", default="31st_July_RAW", help="Source directory for RAW velocity CSVs")
 	parser.add_argument(
 		"--out_dir",
-		default="28th July/28th_July_heading_magnitude_10s_ai_all_raw7",
+		default="31st_July_speed_regime_heading_magnitude_10s",
 		help="Output directory for cleaned, aligned, windowed, and metric CSVs",
 	)
 	parser.add_argument("--group", choices=["all", "AI", "RAW"], default="all", help="Subset to process")
-	parser.add_argument(
-		"--raw_flights",
-		default="7",
-		help=(
-			"Comma-separated RAW flight ordinals to process, using the provided order "
-			"1=raw_10_18_50 through 7=raw_10_37_51. Default: 7"
-		),
-	)
 	parser.add_argument("--clean_window", type=int, default=9, help="Sliding median window size")
 	parser.add_argument("--median_tol", type=float, default=None, help="Override median tolerance")
 	parser.add_argument(
 		"--bound",
 		action="append",
 		default=None,
-		help="Cleaning bounds pattern:min:max. Defaults to vel_*:-4:4",
+		help="Cleaning bounds pattern:min:max. Defaults to vel_*:-8:8",
 	)
 	parser.add_argument("--fill", choices=["none", "linear"], default="linear", help="NaN fill mode")
 	parser.add_argument(
@@ -605,7 +616,6 @@ def parse_arguments() -> argparse.Namespace:
 
 	args.clean_window = CLEANER._normalize_window(args.clean_window)
 	args.bound_overrides = CLEANER._parse_bound_overrides(args.bound or DEFAULT_VELOCITY_BOUNDS)
-	args.raw_flights = parse_raw_flights(args.raw_flights)
 	if args.savgol_window is not None and args.savgol_window <= 0:
 		args.savgol_window = None
 	return args
@@ -614,15 +624,14 @@ def parse_arguments() -> argparse.Namespace:
 def run() -> None:
 	args = parse_arguments()
 	output_dir = resolve_repo_path(args.out_dir)
-	groups = select_groups(args)
-	flight_summary, rollup_summary, cleaning_summary = process_groups(groups, output_dir, args)
+	flight_summary, rollup_summary, cleaning_summary = process_groups(select_groups(args), output_dir, args)
 	flight_summary_path, rollup_summary_path, cleaning_summary_path = save_outputs(
 		output_dir,
 		flight_summary,
 		rollup_summary,
 		cleaning_summary,
 	)
-	readme_path = write_readme(output_dir, describe_groups(groups))
+	readme_path = write_readme(output_dir)
 	print_summary(
 		flight_summary,
 		rollup_summary,
