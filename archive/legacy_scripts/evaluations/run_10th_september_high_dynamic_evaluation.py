@@ -28,10 +28,10 @@ DATASET_SLUG = "10th_september_high_dynamic"
 
 FLIGHTS = {
 	"AI": {
-		1: {"bag": "flight_2026-07-01-12-45-01.bag", "start": 41.14},
-		2: {"bag": "flight_2026-07-01-12-47-25.bag", "start": 40.24},
-		3: {"bag": "flight_2026-07-01-12-49-22.bag", "start": 37.50},
-		4: {"bag": "flight_2026-07-01-12-51-49.bag", "start": 38.23},
+		1: {"bag": "flight_2026-07-01-12-23-36.bag", "start": 41.14},
+		2: {"bag": "flight_2026-07-01-12-27-17.bag", "start": 40.24},
+		3: {"bag": "flight_2026-07-01-12-30-45.bag", "start": 37.50},
+		4: {"bag": "flight_2026-07-01-12-34-16.bag", "start": 38.23},
 	},
 	"RAW": {
 		1: {"bag": "flight_2026-07-01-13-45-38.bag", "start": 36.19},

@@ -13,3 +13,6 @@ __pycache__/7_plot_absolute_velocity_error.cpython-38.pyc
 __pycache__/*
 .vscode/*
 *.md
+
+!scripts/evaluations/README.md
+!scripts/utilities/README.md
