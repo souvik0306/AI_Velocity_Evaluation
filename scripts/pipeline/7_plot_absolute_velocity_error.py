@@ -15,6 +15,7 @@ from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 
 REQUIRED_VEL_COLS = ["time", "vel_x", "vel_y"]
 REQUIRED_ERR_COLS = ["time", "err_x", "err_y"]
+HOVER_SPEED_THRESHOLD_MPS = 0.1
 
 
 def _load_csv(path: Path, required_cols: Iterable[str]) -> pd.DataFrame:
@@ -172,6 +173,87 @@ def _plot_velocity_magnitude(
 	_style_axis(ax)
 	fig.tight_layout()
 	output_path = out_dir / f"{prefix}_velocity_magnitude_est_vs_gt.png"
+	fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
+	if not show:
+		plt.close(fig)
+	return output_path
+
+
+def _plot_hover_horizontal_velocity_diagnostic(
+	merged: pd.DataFrame,
+	out_dir: Path,
+	prefix: str,
+	dpi: int,
+	show: bool,
+	flight_time_zero: Optional[float],
+) -> Path:
+	"""Plot horizontal speed and error together for hover-flight diagnosis."""
+	time0 = float(merged["time"].iloc[0])
+	time1 = float(merged["time"].iloc[-1])
+	rel_time = merged["time"].to_numpy(dtype=float) - time0
+	est_magnitude = np.hypot(
+		merged["vel_x_est"].to_numpy(dtype=float),
+		merged["vel_y_est"].to_numpy(dtype=float),
+	)
+	gt_magnitude = np.hypot(
+		merged["vel_x_gt"].to_numpy(dtype=float),
+		merged["vel_y_gt"].to_numpy(dtype=float),
+	)
+	xy_error = np.hypot(
+		merged["err_x"].to_numpy(dtype=float),
+		merged["err_y"].to_numpy(dtype=float),
+	)
+
+	fig, (ax_speed, ax_error) = plt.subplots(
+		2,
+		1,
+		figsize=(16, 12),
+		sharex=True,
+		constrained_layout=True,
+		gridspec_kw={"height_ratios": (1, 1)},
+	)
+	ax_speed.plot(
+		rel_time,
+		gt_magnitude,
+		label=r"GT $v_{xy}$",
+		color="#2ca02c",
+		linewidth=4.0,
+	)
+	ax_speed.plot(
+		rel_time,
+		est_magnitude,
+		label=r"Estimate $v_{xy}$",
+		color="#d62728",
+		linewidth=4.0,
+	)
+	ax_speed.axhline(
+		HOVER_SPEED_THRESHOLD_MPS,
+		label="Low-speed threshold (0.1 m/s)",
+		color="#4d4d4d",
+		linestyle="--",
+		linewidth=3.0,
+	)
+	ax_speed.set_title("Hover: Horizontal Velocity and Estimation Error", fontsize=22)
+	ax_speed.set_ylabel(r"Horizontal velocity $v_{xy}$ (m/s)", fontsize=19)
+	ax_speed.legend(loc="best", fontsize=16)
+	_style_axis(ax_speed)
+
+	ax_error.plot(
+		rel_time,
+		xy_error,
+		label=r"$e_{xy}=\sqrt{(v_x^{est}-v_x^{GT})^2+(v_y^{est}-v_y^{GT})^2}$",
+		color="#1f42b4",
+		linewidth=4.0,
+	)
+	ax_error.set_xlabel(_window_xlabel(time0, time1, flight_time_zero), fontsize=19)
+	ax_error.set_ylabel(r"Horizontal error $e_{xy}$ (m/s)", fontsize=19)
+	ax_error.legend(loc="best", fontsize=16)
+	_style_axis(ax_error)
+
+	# sharex guarantees identical limits and tick locations for the two panels.
+	ax_error.set_xlim(float(rel_time[0]), float(rel_time[-1]))
+	fig.align_ylabels((ax_speed, ax_error))
+	output_path = out_dir / f"{prefix}_hover_horizontal_velocity_and_error.png"
 	fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
 	if not show:
 		plt.close(fig)
@@ -369,6 +451,11 @@ def main() -> None:
 		type=float,
 		help="Absolute timestamp used as flight-relative t=0 for plot annotations",
 	)
+	parser.add_argument(
+		"--plot_hover_horizontal_diagnostic",
+		action="store_true",
+		help="Add a two-panel hover plot of horizontal speed and horizontal error",
+	)
 	parser.add_argument("--show", action="store_true", help="Show plots interactively")
 	args = parser.parse_args()
 
@@ -468,6 +555,17 @@ def main() -> None:
 			args.flight_time_zero,
 		),
 	]
+	if args.plot_hover_horizontal_diagnostic:
+		output_paths.append(
+			_plot_hover_horizontal_velocity_diagnostic(
+				merged,
+				out_dir,
+				prefix,
+				args.dpi,
+				args.show,
+				args.flight_time_zero,
+			)
+		)
 
 	# Add drift-fit plot
 	drift_plot_path = _plot_drift_fit(

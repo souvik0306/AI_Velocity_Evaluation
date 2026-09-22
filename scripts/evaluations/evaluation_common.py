@@ -17,6 +17,7 @@ PIPELINE_DIR = REPO_ROOT / "scripts" / "pipeline"
 DEFAULT_VELOCITY_BOUNDS = ["vel_*:-8:8"]
 DEFAULT_EST_TOPIC = "/mavros/local_position/velocity_local"
 DEFAULT_GT_TOPIC = "/vrpn_client_node/AIIMU1/twist"
+HOVER_SPEED_THRESHOLD_MPS = 0.1
 
 
 def _load_pipeline(filename: str, module_name: str):
@@ -168,16 +169,21 @@ def evaluate_window(
 	duration_s: int,
 	plot_dpi: int,
 	flight_time_zero: float,
+	hover_analysis: bool = False,
 ) -> Dict[str, object]:
 	rmse_metrics, bias_path, rmse_summary_path = calculate_rmse(
 		est_window_path, gt_window_path, est_window_path.parent
 	)
+	hover_regime_metrics = {}
+	if hover_analysis:
+		hover_regime_metrics = calculate_hover_regime_rmse(bias_path, gt_window_path)
 	drift_rate, drift_intercept, plots_dir = calculate_drift_and_plots(
 		bias_path=bias_path,
 		est_window_path=est_window_path,
 		gt_window_path=gt_window_path,
 		plot_dpi=plot_dpi,
 		flight_time_zero=flight_time_zero,
+		plot_hover_horizontal_diagnostic=hover_analysis,
 	)
 	bias_df = pd.read_csv(bias_path)
 	sample_start_s = float(bias_df["time"].iloc[0]) - flight_time_zero
@@ -193,6 +199,7 @@ def evaluate_window(
 		"sampled_window_duration_s": sample_end_s - sample_start_s,
 		"samples": int(len(bias_df)),
 		**rmse_metrics,
+		**hover_regime_metrics,
 		"drift_rate_mps2": drift_rate,
 		"drift_intercept_mps": drift_intercept,
 		"rmse_summary_file": str(rmse_summary_path),
@@ -212,6 +219,8 @@ def summarize_duration(rows: List[Dict[str, object]]) -> Dict[str, object]:
 		"bias_corrected_rmse_y_mps",
 		"bias_corrected_rmse_z_mps",
 		"bias_corrected_rmse_xy_mps",
+		"bias_corrected_rmse_xy_stationary_mps",
+		"bias_corrected_rmse_xy_moving_mps",
 		"drift_rate_mps2",
 		"drift_intercept_mps",
 	]
@@ -220,7 +229,12 @@ def summarize_duration(rows: List[Dict[str, object]]) -> Dict[str, object]:
 		"total_samples": int(df["samples"].sum()),
 	}
 	for column in metric_columns:
+		if column not in df.columns:
+			continue
 		result[f"mean_{column}"] = float(pd.to_numeric(df[column], errors="coerce").mean())
+	for column in ("stationary_samples", "moving_samples"):
+		if column in df.columns:
+			result[f"total_{column}"] = int(pd.to_numeric(df[column], errors="coerce").sum())
 	return result
 
 
@@ -248,8 +262,48 @@ def calculate_rmse(est_window_path: Path, gt_window_path: Path, output_dir: Path
     return values, bias_path, summary_path
 
 
+def calculate_hover_regime_rmse(
+	bias_path: Path,
+	gt_window_path: Path,
+	threshold_mps: float = HOVER_SPEED_THRESHOLD_MPS,
+) -> Dict[str, object]:
+	"""Calculate bias-corrected horizontal RMSE above and below the hover threshold."""
+	errors = load_velocity_csv(
+		bias_path,
+		["time", "err_x_bias", "err_y_bias"],
+	)
+	gt = load_velocity_csv(gt_window_path, ["time", "vel_x", "vel_y"])
+	merged = pd.merge(errors, gt, on="time", how="inner")
+	if merged.empty:
+		raise ValueError("No overlapping timestamps between bias errors and GT CSVs")
+
+	gt_xy = np.hypot(
+		merged["vel_x"].to_numpy(dtype=float),
+		merged["vel_y"].to_numpy(dtype=float),
+	)
+	squared_xy_error = (
+		merged["err_x_bias"].to_numpy(dtype=float) ** 2
+		+ merged["err_y_bias"].to_numpy(dtype=float) ** 2
+	)
+	stationary = gt_xy < threshold_mps
+	moving = ~stationary
+
+	def regime_rmse(mask: np.ndarray) -> float:
+		if not mask.any():
+			return float("nan")
+		return float(np.sqrt(np.mean(squared_xy_error[mask])))
+
+	return {
+		"stationary_samples": int(stationary.sum()),
+		"moving_samples": int(moving.sum()),
+		"bias_corrected_rmse_xy_stationary_mps": round(regime_rmse(stationary), 6),
+		"bias_corrected_rmse_xy_moving_mps": round(regime_rmse(moving), 6),
+	}
+
+
 def calculate_drift_and_plots(bias_path: Path, est_window_path: Path, gt_window_path: Path,
-                              plot_dpi: int, flight_time_zero: float):
+                              plot_dpi: int, flight_time_zero: float,
+                              plot_hover_horizontal_diagnostic: bool = False):
     """Run the existing report script and return its drift rate and plots."""
     plots_dir = bias_path.parent / "plots" / bias_path.stem.replace("_bias_errors", "")
     command = [
@@ -261,6 +315,8 @@ def calculate_drift_and_plots(bias_path: Path, est_window_path: Path, gt_window_
         "--dpi", str(plot_dpi),
         "--flight_time_zero", f"{flight_time_zero:.9f}",
     ]
+    if plot_hover_horizontal_diagnostic:
+        command.append("--plot_hover_horizontal_diagnostic")
     completed = subprocess.run(command, text=True, capture_output=True)
     if completed.returncode != 0:
         raise RuntimeError(f"Report failed for {bias_path}:\n{completed.stdout}{completed.stderr}")
@@ -338,7 +394,11 @@ def group_rollup(rows: List[Dict[str, object]], group: str) -> Dict[str, object]
 	return {"group": group, **rollup}
 
 
-def evaluate_dataset(bags_dir: Path, flights) -> List[Dict[str, object]]:
+def evaluate_dataset(
+	bags_dir: Path,
+	flights,
+	hover_analysis: bool = False,
+) -> List[Dict[str, object]]:
 	group_name = Path(sys.argv[0]).stem[len("analyze_"):]
 	args = parse_arguments(bags_dir, REPO_ROOT / "results" / group_name, flights)
 	validate_configuration(flights)
@@ -406,6 +466,7 @@ def evaluate_dataset(bags_dir: Path, flights) -> List[Dict[str, object]]:
 					duration_s,
 					args.plot_dpi,
 					flight_time_zero,
+					hover_analysis,
 				)
 				results[duration_s].append({"group": group, "bag": bag_path.name, **row})
 

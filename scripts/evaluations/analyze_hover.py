@@ -19,4 +19,4 @@ FLIGHTS = {
 }
 
 if __name__ == "__main__":
-    evaluate_dataset(BAGS_DIR, FLIGHTS)
+    evaluate_dataset(BAGS_DIR, FLIGHTS, hover_analysis=True)
