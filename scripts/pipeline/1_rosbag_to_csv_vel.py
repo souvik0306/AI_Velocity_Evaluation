@@ -6,6 +6,16 @@ import rosbag
 import pandas as pd
 
 
+def header_time_to_sec(msg):
+    """Return a message's ROS header timestamp in seconds."""
+    if not hasattr(msg, "header") or not hasattr(msg.header, "stamp"):
+        message_type = getattr(msg, "_type", type(msg).__name__)
+        raise AttributeError(
+            f"message type {message_type} has no header.stamp timestamp"
+        )
+    return msg.header.stamp.to_sec()
+
+
 def twist_message_to_row(t, msg):
     # Support multiple message shapes: Twist, TwistStamped, Odometry
     def _get_linear(m):
@@ -80,8 +90,8 @@ def main():
     ]
 
     with rosbag.Bag(args.bag, "r") as bag:
-        for topic, msg, stamp in bag.read_messages(topics=selected_topics):
-            t = stamp.to_sec()
+        for topic, msg, _bag_stamp in bag.read_messages(topics=selected_topics):
+            t = header_time_to_sec(msg)
 
             if topic == args.velocity_topic:
                 est_rows.append(twist_message_to_row(t, msg))

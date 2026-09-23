@@ -43,9 +43,9 @@ def extract_bag_velocities(
 	est_rows = []
 	gt_rows = []
 	with CONVERTER.rosbag.Bag(str(bag_path), "r") as bag:
-		flight_time_zero = float(bag.get_start_time())
-		for topic, message, stamp in bag.read_messages(topics=[est_topic, gt_topic]):
-			row = CONVERTER.twist_message_to_row(stamp.to_sec(), message)
+		for topic, message, _bag_stamp in bag.read_messages(topics=[est_topic, gt_topic]):
+			header_time = CONVERTER.header_time_to_sec(message)
+			row = CONVERTER.twist_message_to_row(header_time, message)
 			if topic == est_topic:
 				est_rows.append(row)
 			else:
@@ -59,6 +59,7 @@ def extract_bag_velocities(
 	est_path.parent.mkdir(parents=True, exist_ok=True)
 	CONVERTER.build_velocity_dataframe(est_rows).sort_values("time").to_csv(est_path, index=False)
 	CONVERTER.build_velocity_dataframe(gt_rows).sort_values("time").to_csv(gt_path, index=False)
+	flight_time_zero = min(est_rows[0]["time"], gt_rows[0]["time"])
 	return len(est_rows), len(gt_rows), flight_time_zero
 
 
