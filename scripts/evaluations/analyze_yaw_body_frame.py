@@ -15,7 +15,7 @@ from matplotlib.ticker import AutoMinorLocator, MaxNLocator
 from scipy.spatial.transform import Rotation
 
 import evaluation_common as common
-from analyze_yaw import BAGS_DIR, FLIGHTS
+from analyze_2nd_oct_yaw import BAGS_DIR, FLIGHTS
 
 
 DEFAULT_POSE_TOPIC = "/vrpn_client_node/AIIMU1/pose"
