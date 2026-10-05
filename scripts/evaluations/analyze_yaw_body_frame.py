@@ -40,7 +40,11 @@ def parse_arguments() -> argparse.Namespace:
 		default=str(common.REPO_ROOT / "results" / "yaw_body_frame"),
 	)
 	parser.add_argument("--group", choices=["all", *FLIGHTS], default="all")
-	parser.add_argument("--duration", choices=["20s"], default="20s")
+	parser.add_argument(
+		"--duration",
+		choices=["all", "5s", "10s", "20s"],
+		default="all",
+	)
 	parser.add_argument("--velocity_topic", default=common.DEFAULT_EST_TOPIC)
 	parser.add_argument("--gt_velocity_topic", default=common.DEFAULT_GT_TOPIC)
 	parser.add_argument("--pose_topic", default=DEFAULT_POSE_TOPIC)
@@ -368,9 +372,10 @@ def summarize_group(rows: List[Dict[str, object]], group: str) -> Dict[str, obje
 
 def evaluate_yaw_body_frame() -> List[Dict[str, object]]:
 	args = parse_arguments()
-	common.validate_configuration(FLIGHTS)
-	groups = common.selected_groups(args.group, FLIGHTS)
 	durations = common.selected_durations(args.duration)
+	for duration_s in durations:
+		common.validate_configuration(FLIGHTS, duration_s)
+	groups = common.selected_groups(args.group, FLIGHTS)
 	results: Dict[int, List[Dict[str, object]]] = {
 		duration: [] for duration in durations
 	}
@@ -486,7 +491,7 @@ def evaluate_yaw_body_frame() -> List[Dict[str, object]]:
 		]).to_csv(group_path, index=False)
 		print(f"Saved {flight_path}")
 		print(f"Saved {group_path}")
-	return results[20]
+	return [row for duration_s in durations for row in results[duration_s]]
 
 
 if __name__ == "__main__":
