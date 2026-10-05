@@ -439,7 +439,7 @@ def evaluate_yaw_body_frame() -> List[Dict[str, object]]:
 				output_dir = args.out_dir / f"{duration_s}s" / group
 				est_window, gt_window = common.clip_window(
 					est_clean, gt_aligned, start_s, duration_s,
-					output_dir, flight_name,
+					output_dir, flight_name, flight_time_zero,
 				)
 				row = common.evaluate_window(
 					est_window, gt_window, flight_name, start_s, duration_s,
