@@ -140,10 +140,15 @@ def clip_window(
 	duration_s: int,
 	output_dir: Path,
 	flight_name: str,
+	flight_time_zero: Optional[float] = None,
 ) -> Tuple[Path, Path]:
 	est_df = load_velocity_csv(est_clean_path, ["time"])
 	gt_df = load_velocity_csv(gt_aligned_path, ["time"])
-	reference_time = float(gt_df["time"].iloc[0])
+	reference_time = (
+		float(gt_df["time"].iloc[0])
+		if flight_time_zero is None
+		else float(flight_time_zero)
+	)
 	start_time = reference_time + start_s
 	end_time = start_time + duration_s
 	est_window = est_df[est_df["time"].between(start_time, end_time)].copy()
@@ -399,6 +404,7 @@ def evaluate_dataset(
 	bags_dir: Path,
 	flights,
 	hover_analysis: bool = False,
+	bags_grouped: bool = True,
 ) -> List[Dict[str, object]]:
 	group_name = Path(sys.argv[0]).stem[len("analyze_"):]
 	args = parse_arguments(bags_dir, REPO_ROOT / "results" / group_name, flights)
@@ -457,7 +463,8 @@ def evaluate_dataset(
 				)
 				output_dir = args.out_dir / f"{duration_s}s" / group
 				est_window, gt_window = clip_window(
-					est_clean, gt_aligned, start_s, duration_s, output_dir, flight_name
+					est_clean, gt_aligned, start_s, duration_s, output_dir, flight_name,
+					flight_time_zero,
 				)
 				row = evaluate_window(
 					est_window,
