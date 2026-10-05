@@ -352,20 +352,22 @@ def selected_groups(value: str, flights) -> Tuple[str, ...]:
 
 
 def selected_durations(value: str) -> Tuple[int, ...]:
-	return (20,)
+	if value == "all":
+		return (5, 10, 20)
+	return (int(value[:-1] if value.endswith("s") else value),)
 
 
 def parse_arguments(bags_dir: Path, output_dir: Path, flights) -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
-		description="Evaluate configured ROS bags over 20-second windows."
+		description="Evaluate configured ROS bags over the selected time window."
 	)
 	parser.add_argument("--bags_dir", default=str(bags_dir))
 	parser.add_argument("--out_dir", default=str(output_dir))
 	parser.add_argument("--group", choices=["all", *flights], default="all")
 	parser.add_argument(
 		"--duration",
-		choices=["20s"],
-		default="20s",
+		choices=["all", "5s", "10s", "20s"],
+		default="all",
 	)
 	parser.add_argument("--velocity_topic", default=DEFAULT_EST_TOPIC)
 	parser.add_argument("--gt_velocity_topic", default=DEFAULT_GT_TOPIC)
@@ -408,9 +410,10 @@ def evaluate_dataset(
 ) -> List[Dict[str, object]]:
 	group_name = Path(sys.argv[0]).stem[len("analyze_"):]
 	args = parse_arguments(bags_dir, REPO_ROOT / "results" / group_name, flights)
-	validate_configuration(flights)
-	groups = selected_groups(args.group, flights)
 	durations = selected_durations(args.duration)
+	for duration_s in durations:
+		validate_configuration(flights, duration_s)
+	groups = selected_groups(args.group, flights)
 	results: Dict[int, List[Dict[str, object]]] = {duration: [] for duration in durations}
 	cleaning_rows: List[Dict[str, object]] = []
 
@@ -499,4 +502,4 @@ def evaluate_dataset(
 		print(f"Saved {summary_path}")
 		print(f"Saved {group_path}")
 
-	return results[20]
+	return [row for duration_s in durations for row in results[duration_s]]
