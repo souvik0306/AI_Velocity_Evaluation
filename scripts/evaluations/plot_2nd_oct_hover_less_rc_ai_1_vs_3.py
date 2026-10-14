@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Compare AI flights 1 and 3 from the 2nd October hover-less-RC test.
+"""Compare selected hover-less-RC flights from 2 October and 22 September.
 
 The script uses the existing cleaned/aligned 20-second velocity windows and
 reads RC roll/pitch inputs directly from each ROS bag.  Each output figure has
-flight 1 above flight 3 and uses 0--20 seconds from the respective configured
-window start so that all traces are directly time-aligned.
+2 October AI flights 1 and 3 followed by 22 September RAW flight 4.  All plots
+use 0--20 seconds from their respective configured window starts so that the
+traces are directly time-aligned.
 """
 
 import argparse
@@ -24,12 +25,40 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BAGS_DIR = REPO_ROOT / "data" / "2nd_Oct_Hover_less_RC" / "AI"
 DEFAULT_RESULTS_DIR = REPO_ROOT / "results" / "2nd_oct_hover_less_rc" / "20s" / "AI"
-DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_DIR / "comparison_flights_1_and_3"
+DEFAULT_RAW_BAG = (
+    REPO_ROOT
+    / "data"
+    / "22nd_Sept_Hover_less_RC"
+    / "RAW"
+    / "flight_2026-07-01-14-21-56.bag"
+)
+DEFAULT_RAW_RESULTS_DIR = (
+    REPO_ROOT / "results" / "22nd_sept_hover_less_rc" / "20s" / "RAW"
+)
+DEFAULT_OUTPUT_DIR = DEFAULT_RESULTS_DIR / "comparison_ai_1_3_raw_4"
 
 WINDOW_DURATION_S = 20.0
 FLIGHTS = {
-    1: {"bag": "flight_1.bag", "start": 56.24},
-    3: {"bag": "flight_3.bag", "start": 37.99},
+    "oct_ai_1": {
+        "flight": 1,
+        "group": "AI",
+        "date": "2 October",
+        "bag": "flight_1.bag",
+        "start": 56.24,
+    },
+    "oct_ai_3": {
+        "flight": 3,
+        "group": "AI",
+        "date": "2 October",
+        "bag": "flight_3.bag",
+        "start": 37.99,
+    },
+    "sept_raw_4": {
+        "flight": 4,
+        "group": "RAW",
+        "date": "22 September",
+        "start": 36.97,
+    },
 }
 
 EST_TOPIC = "/mavros/local_position/velocity_local"
@@ -53,12 +82,16 @@ DATA_LINE_WIDTH = 4
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Plot 20-second AI flight 1 versus flight 3 comparisons for the "
-            "2nd October hover-less-RC dataset."
+            "Plot 20-second comparisons for 2 October AI flights 1 and 3 "
+            "and 22 September RAW flight 4."
         )
     )
     parser.add_argument("--bags-dir", type=Path, default=DEFAULT_BAGS_DIR)
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
+    parser.add_argument("--raw-bag", type=Path, default=DEFAULT_RAW_BAG)
+    parser.add_argument(
+        "--raw-results-dir", type=Path, default=DEFAULT_RAW_RESULTS_DIR
+    )
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--dpi", type=int, default=300)
     return parser.parse_args()
@@ -71,7 +104,8 @@ def load_velocity_window(results_dir: Path, flight: int) -> pd.DataFrame:
         if not path.is_file():
             raise FileNotFoundError(
                 f"Required 20-second result not found: {path}\n"
-                "Run analyze_2nd_oct_hover_less_rc.py --duration 20s first."
+                "Run the corresponding hover-less-RC analysis with "
+                "--duration 20s first."
             )
 
     required = ["time", "vel_x", "vel_y"]
@@ -162,10 +196,12 @@ def load_rc_window(bag_path: Path, configured_start_s: float) -> pd.DataFrame:
     return rc
 
 
-def style_axis(axis: Axes, flight: int, ylabel: str) -> None:
-    start = float(FLIGHTS[flight]["start"])
+def style_axis(axis: Axes, flight_key: str, ylabel: str) -> None:
+    config = FLIGHTS[flight_key]
+    start = float(config["start"])
     axis.set_title(
-        f"AI Flight {flight}  |  source window {start:.2f}--"
+        f"{config['date']} {config['group']} Flight {config['flight']}  |  "
+        f"source window {start:.2f}--"
         f"{start + WINDOW_DURATION_S:.2f} s",
         fontsize=SUBPLOT_TITLE_FONT_SIZE,
         loc="left",
@@ -181,21 +217,21 @@ def style_axis(axis: Axes, flight: int, ylabel: str) -> None:
     axis.axvline(0.0, color="0.25", linewidth=0.8, alpha=0.5)
 
 
-def save_two_flight_figure(
+def save_three_flight_figure(
     out_path: Path,
     title: str,
     ylabel: str,
     plot_flight,
     dpi: int,
     reference_line: Optional[float] = None,
-    figsize: Tuple[float, float] = (14.0, 8.5),
+    figsize: Tuple[float, float] = (14.0, 12.0),
 ) -> None:
-    fig, axes = plt.subplots(2, 1, figsize=figsize, sharex=True, sharey=True)
-    for axis, flight in zip(axes, FLIGHTS):
-        plot_flight(axis, flight)
+    fig, axes = plt.subplots(3, 1, figsize=figsize, sharex=True, sharey=True)
+    for axis, flight_key in zip(axes, FLIGHTS):
+        plot_flight(axis, flight_key)
         if reference_line is not None:
             axis.axhline(reference_line, color="0.25", linestyle="--", linewidth=1.5)
-        style_axis(axis, flight, ylabel)
+        style_axis(axis, flight_key, ylabel)
         axis.legend(
             loc="best", ncol=2, framealpha=0.92, fontsize=LEGEND_FONT_SIZE
         )
@@ -214,24 +250,32 @@ def main() -> None:
     args = parse_args()
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
-    velocity: Dict[int, pd.DataFrame] = {}
-    rc: Dict[int, pd.DataFrame] = {}
-    absolute_window_starts: Dict[int, float] = {}
-    for flight, config in FLIGHTS.items():
-        bag_path = args.bags_dir / str(config["bag"])
+    velocity: Dict[str, pd.DataFrame] = {}
+    rc: Dict[str, pd.DataFrame] = {}
+    absolute_window_starts: Dict[str, float] = {}
+    for flight_key, config in FLIGHTS.items():
+        flight = int(config["flight"])
+        if config["group"] == "RAW":
+            bag_path = args.raw_bag
+            results_dir = args.raw_results_dir
+        else:
+            bag_path = args.bags_dir / str(config["bag"])
+            results_dir = args.results_dir
         if not bag_path.is_file():
             raise FileNotFoundError(f"ROS bag not found: {bag_path}")
 
-        velocity[flight] = load_velocity_window(args.results_dir, flight)
-        rc[flight] = load_rc_window(bag_path, float(config["start"]))
-        absolute_window_starts[flight] = float(rc[flight]["time"].iloc[0]) - float(
-            rc[flight]["relative_time"].iloc[0]
+        velocity[flight_key] = load_velocity_window(results_dir, flight)
+        rc[flight_key] = load_rc_window(bag_path, float(config["start"]))
+        absolute_window_starts[flight_key] = float(
+            rc[flight_key]["time"].iloc[0]
+        ) - float(
+            rc[flight_key]["relative_time"].iloc[0]
         )
-        velocity[flight]["relative_time"] = (
-            velocity[flight]["time"] - absolute_window_starts[flight]
+        velocity[flight_key]["relative_time"] = (
+            velocity[flight_key]["time"] - absolute_window_starts[flight_key]
         )
-        velocity[flight] = velocity[flight][
-            velocity[flight]["relative_time"].between(0.0, WINDOW_DURATION_S)
+        velocity[flight_key] = velocity[flight_key][
+            velocity[flight_key]["relative_time"].between(0.0, WINDOW_DURATION_S)
         ].copy()
 
     output_paths = []
@@ -241,10 +285,10 @@ def main() -> None:
         ("horizontal", r"$V_h = \sqrt{V_x^2 + V_y^2}$", "horizontal_ekf2", "horizontal_gt"),
     )
     for file_label, math_label, ekf2_column, gt_column in velocity_specs:
-        out_path = args.out_dir / f"ai_flights_1_3_{file_label}_gt_vs_ekf2.png"
+        out_path = args.out_dir / f"ai_1_3_raw_4_{file_label}_gt_vs_ekf2.png"
 
-        def plot_velocity(axis: Axes, flight: int, ec=ekf2_column, gc=gt_column) -> None:
-            data = velocity[flight]
+        def plot_velocity(axis: Axes, flight_key: str, ec=ekf2_column, gc=gt_column) -> None:
+            data = velocity[flight_key]
             axis.plot(
                 data["relative_time"].to_numpy(), data[gc].to_numpy(), color=GT_COLOR,
                 linewidth=DATA_LINE_WIDTH, label=f"GT {math_label}",
@@ -254,21 +298,21 @@ def main() -> None:
                 linewidth=DATA_LINE_WIDTH, alpha=0.9, label=f"EKF2 {math_label}",
             )
 
-        save_two_flight_figure(
+        save_three_flight_figure(
             out_path,
-            f"2nd October Hover Less RC: GT vs EKF2 {math_label}",
+            f"Hover Less RC Comparison: GT vs EKF2 {math_label}",
             f"{math_label} (m/s)",
             plot_velocity,
             args.dpi,
             reference_line=0.0,
-            figsize=(17.0, 10.5) if file_label == "horizontal" else (14.0, 8.5),
+            figsize=(17.0, 14.0) if file_label == "horizontal" else (14.0, 12.0),
         )
         output_paths.append(out_path)
 
-    errors_path = args.out_dir / "ai_flights_1_3_signed_velocity_errors.png"
+    errors_path = args.out_dir / "ai_1_3_raw_4_signed_velocity_errors.png"
 
-    def plot_errors(axis: Axes, flight: int) -> None:
-        data = velocity[flight]
+    def plot_errors(axis: Axes, flight_key: str) -> None:
+        data = velocity[flight_key]
         axis.plot(
             data["relative_time"].to_numpy(), data["err_x"].to_numpy(),
             color=ERROR_X_COLOR,
@@ -280,9 +324,9 @@ def main() -> None:
             linewidth=DATA_LINE_WIDTH, label=r"$e_y = V_{y,EKF2} - V_{y,GT}$",
         )
 
-    save_two_flight_figure(
+    save_three_flight_figure(
         errors_path,
-        "2nd October Hover Less RC: Signed Velocity Errors",
+        "Hover Less RC Comparison: Signed Velocity Errors",
         "Signed error (m/s)",
         plot_errors,
         args.dpi,
@@ -290,10 +334,10 @@ def main() -> None:
     )
     output_paths.append(errors_path)
 
-    rc_path = args.out_dir / "ai_flights_1_3_rc_roll_pitch.png"
+    rc_path = args.out_dir / "ai_1_3_raw_4_rc_roll_pitch.png"
 
-    def plot_rc(axis: Axes, flight: int) -> None:
-        data = rc[flight]
+    def plot_rc(axis: Axes, flight_key: str) -> None:
+        data = rc[flight_key]
         axis.plot(
             data["relative_time"].to_numpy(), data["roll"].to_numpy(),
             color=RC_ROLL_COLOR,
@@ -305,9 +349,9 @@ def main() -> None:
             linewidth=DATA_LINE_WIDTH, label="RC pitch (channels[1])",
         )
 
-    save_two_flight_figure(
+    save_three_flight_figure(
         rc_path,
-        "2nd October Hover Less RC: RC Roll/Pitch Commands",
+        "Hover Less RC Comparison: RC Roll/Pitch Commands",
         "RC input (PWM)",
         plot_rc,
         args.dpi,
