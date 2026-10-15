@@ -357,7 +357,12 @@ def selected_durations(value: str) -> Tuple[int, ...]:
 	return (int(value[:-1] if value.endswith("s") else value),)
 
 
-def parse_arguments(bags_dir: Path, output_dir: Path, flights) -> argparse.Namespace:
+def parse_arguments(
+	bags_dir: Path,
+	output_dir: Path,
+	flights,
+	default_duration: str = "all",
+) -> argparse.Namespace:
 	parser = argparse.ArgumentParser(
 		description="Evaluate configured ROS bags over the selected time window."
 	)
@@ -367,7 +372,7 @@ def parse_arguments(bags_dir: Path, output_dir: Path, flights) -> argparse.Names
 	parser.add_argument(
 		"--duration",
 		choices=["all", "5s", "10s", "20s"],
-		default="all",
+		default=default_duration,
 	)
 	parser.add_argument("--velocity_topic", default=DEFAULT_EST_TOPIC)
 	parser.add_argument("--gt_velocity_topic", default=DEFAULT_GT_TOPIC)
@@ -407,9 +412,15 @@ def evaluate_dataset(
 	flights,
 	hover_analysis: bool = False,
 	bags_grouped: bool = True,
+	default_duration: str = "all",
 ) -> List[Dict[str, object]]:
 	group_name = Path(sys.argv[0]).stem[len("analyze_"):]
-	args = parse_arguments(bags_dir, REPO_ROOT / "results" / group_name, flights)
+	args = parse_arguments(
+		bags_dir,
+		REPO_ROOT / "results" / group_name,
+		flights,
+		default_duration=default_duration,
+	)
 	durations = selected_durations(args.duration)
 	for duration_s in durations:
 		validate_configuration(flights, duration_s)
