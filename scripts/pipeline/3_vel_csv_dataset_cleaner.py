@@ -174,7 +174,7 @@ def clean_dataframe(
 	bound_overrides: List[Tuple[str, Optional[float], Optional[float]]],
 	fill: str,
 	savgol_window: Optional[int] = None,
-	savgol_polyorder: int = 3,
+	savgol_polyorder: int = 2,
 ) -> Tuple[pd.DataFrame, Dict[str, int], Dict[str, int]]:
 	if "time" in df.columns:
 		df = df.sort_values("time")
@@ -258,7 +258,7 @@ def main() -> None:
 		"--savgol_polyorder",
 		type=int,
 		default=2,
-		help="Polynomial order for Savitzky-Golay filter (default: 3)",
+		help="Polynomial order for Savitzky-Golay filter (default: 2)",
 	)
 	args = parser.parse_args()
 
@@ -315,4 +315,4 @@ if __name__ == "__main__":
 
 # python3 3_vel_csv_dataset_cleaner.py --est_csv flight_6_27_vel_est.csv --gt_csv flight_6_27_vel_gt.csv
 # Example with Savitzky-Golay smoothing for ground truth data:
-# python3 3_vel_csv_dataset_cleaner.py --est_csv flight_6_27_vel_est.csv --gt_csv flight_6_27_vel_gt.csv --savgol_window 11 --savgol_polyorder 3 
+# python3 3_vel_csv_dataset_cleaner.py --est_csv flight_6_27_vel_est.csv --gt_csv flight_6_27_vel_gt.csv --savgol_window 11 --savgol_polyorder 2
