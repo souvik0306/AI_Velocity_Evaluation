@@ -31,6 +31,7 @@ def _load_pipeline(filename: str, module_name: str):
 
 CONVERTER = _load_pipeline("1_rosbag_to_csv_vel.py", "velocity_converter")
 CLEANER = _load_pipeline("3_vel_csv_dataset_cleaner.py", "velocity_cleaner")
+ALIGNER = _load_pipeline("4_align_vel_csv.py", "velocity_aligner")
 METRICS = _load_pipeline("6_bias_zeroing_and_rmse.py", "velocity_metrics")
 
 def extract_bag_velocities(
@@ -72,6 +73,7 @@ def clean_velocity_csv(
 	fill: str,
 	savgol_window: Optional[int],
 	savgol_polyorder: int,
+	max_interp_gap_s: float = CLEANER.DEFAULT_MAX_INTERPOLATION_GAP_S,
 ) -> Tuple[Dict[str, int], Dict[str, int]]:
 	df = pd.read_csv(input_path)
 	cleaned, pruned, filtered = CLEANER.clean_dataframe(
@@ -82,10 +84,19 @@ def clean_velocity_csv(
 		fill,
 		savgol_window=savgol_window,
 		savgol_polyorder=savgol_polyorder,
+		max_interp_gap_s=max_interp_gap_s,
 	)
 	output_path.parent.mkdir(parents=True, exist_ok=True)
 	cleaned.to_csv(output_path, index=False)
 	return pruned, filtered
+
+
+def physically_prune_velocity_csv(
+	input_path: Path,
+	output_path: Path,
+	bound_overrides: List[Tuple[str, Optional[float], Optional[float]]],
+) -> Dict[str, int]:
+	return CLEANER.physically_prune_csv(input_path, output_path, bound_overrides)
 
 
 def load_velocity_csv(path: Path, required_columns: Iterable[str]) -> pd.DataFrame:
@@ -116,20 +127,12 @@ def align_ground_truth(
 		gt_df["time"] = gt_df["time"] - gt_latency
 		gt_df = gt_df.sort_values("time").reset_index(drop=True)
 
-	merge_args = {"on": "time", "direction": "nearest", "suffixes": ("_est", "_gt")}
-	if tolerance is not None:
-		merge_args["tolerance"] = tolerance
-	aligned = pd.merge_asof(est_df, gt_df, **merge_args)
-
-	gt_columns = []
-	rename = {}
-	for column in gt_df.columns:
-		if column in aligned.columns:
-			gt_columns.append(column)
-		elif f"{column}_gt" in aligned.columns:
-			gt_columns.append(f"{column}_gt")
-			rename[f"{column}_gt"] = column
-	aligned[gt_columns].rename(columns=rename).to_csv(output_path, index=False)
+	aligned = ALIGNER.interpolate_ground_truth_to_timestamps(
+		gt_df,
+		est_df["time"],
+		tolerance_s=tolerance,
+	)
+	aligned.to_csv(output_path, index=False)
 	return output_path
 
 
@@ -386,10 +389,16 @@ def parse_arguments(
 		help="Cleaning bound pattern:min:max; default is vel_*:-8:8",
 	)
 	parser.add_argument("--fill", choices=["none", "linear"], default="linear")
-	parser.add_argument("--savgol_window", type=int, default=21, help="Use 0 to disable smoothing")
+	parser.add_argument(
+		"--max_interp_gap",
+		type=float,
+		default=CLEANER.DEFAULT_MAX_INTERPOLATION_GAP_S,
+		help="Maximum bounded GT gap to interpolate in seconds (default: 0.025)",
+	)
+	parser.add_argument("--savgol_window", type=int, default=11, help="Use 0 to disable smoothing")
 	parser.add_argument("--savgol_polyorder", type=int, default=2)
 	parser.add_argument("--gt_latency", type=float, default=0.025)
-	parser.add_argument("--tolerance", type=float, default=None)
+	parser.add_argument("--tolerance", type=float, default=ALIGNER.DEFAULT_ALIGNMENT_TOLERANCE_S)
 	args = parser.parse_args()
 	args.bags_dir = resolve_path(args.bags_dir)
 	args.out_dir = resolve_path(args.out_dir)
@@ -447,13 +456,12 @@ def evaluate_dataset(
 			est_clean = cleaned_dir / f"{flight_name}_vel_est_clean.csv"
 			gt_clean = cleaned_dir / f"{flight_name}_vel_gt_clean.csv"
 			gt_aligned = cleaned_dir / f"{flight_name}_vel_gt_clean_aligned.csv"
-			est_pruned, est_filtered = clean_velocity_csv(
-				est_raw, est_clean, args.clean_window, args.median_tol, args.bound_overrides,
-				args.fill, args.savgol_window, args.savgol_polyorder,
+			est_pruned = physically_prune_velocity_csv(
+				est_raw, est_clean, args.bound_overrides,
 			)
 			gt_pruned, gt_filtered = clean_velocity_csv(
 				gt_raw, gt_clean, args.clean_window, args.median_tol, args.bound_overrides,
-				args.fill, args.savgol_window, args.savgol_polyorder,
+				args.fill, args.savgol_window, args.savgol_polyorder, args.max_interp_gap,
 			)
 			align_ground_truth(est_clean, gt_clean, gt_aligned, args.gt_latency, args.tolerance)
 			cleaning_rows.append({
@@ -464,7 +472,6 @@ def evaluate_dataset(
 				"gt_extracted_rows": gt_rows,
 				"estimate_bound_pruned_values": sum(est_pruned.values()),
 				"gt_bound_pruned_values": sum(gt_pruned.values()),
-				"estimate_median_filtered_values": sum(est_filtered.values()),
 				"gt_median_filtered_values": sum(gt_filtered.values()),
 			})
 

@@ -4,7 +4,11 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
+
+
+DEFAULT_ALIGNMENT_TOLERANCE_S = 0.025
 
 
 def _load_sorted_csv(path: Path, time_col: str) -> pd.DataFrame:
@@ -26,6 +30,69 @@ def _apply_latency(df: pd.DataFrame, time_col: str, latency_s: float) -> pd.Data
 	return shifted.sort_values(time_col)
 
 
+def interpolate_ground_truth_to_timestamps(
+	df_gt: pd.DataFrame,
+	target_times: pd.Series,
+	time_col: str = "time",
+	tolerance_s: Optional[float] = DEFAULT_ALIGNMENT_TOLERANCE_S,
+) -> pd.DataFrame:
+	"""Linearly interpolate GT onto target timestamps without extrapolation."""
+	if tolerance_s is not None and tolerance_s < 0:
+		raise ValueError("Alignment tolerance must be non-negative")
+
+	gt = df_gt.copy()
+	gt[time_col] = pd.to_numeric(gt[time_col], errors="coerce")
+	gt = gt.dropna(subset=[time_col]).sort_values(time_col)
+	gt = gt.drop_duplicates(subset=[time_col], keep="last").reset_index(drop=True)
+	target = pd.to_numeric(target_times, errors="coerce").to_numpy(dtype=float)
+	result = pd.DataFrame({time_col: target})
+	if gt.empty:
+		for col in gt.columns:
+			if col != time_col:
+				result[col] = np.nan
+		return result
+
+	source_times = gt[time_col].to_numpy(dtype=float)
+	right_indices = np.searchsorted(source_times, target, side="left")
+	exact = np.zeros(target.size, dtype=bool)
+	in_bounds = right_indices < source_times.size
+	exact[in_bounds] = source_times[right_indices[in_bounds]] == target[in_bounds]
+	bracketed = (~exact) & (right_indices > 0) & (right_indices < source_times.size)
+	left_indices = np.maximum(right_indices - 1, 0)
+	safe_right_indices = np.minimum(right_indices, source_times.size - 1)
+
+	if tolerance_s is not None:
+		left_distance = target - source_times[left_indices]
+		right_distance = source_times[safe_right_indices] - target
+		bracketed &= (
+			(left_distance <= tolerance_s + np.finfo(float).eps)
+			& (right_distance <= tolerance_s + np.finfo(float).eps)
+		)
+
+	for col in gt.columns:
+		if col == time_col:
+			continue
+		source_values = pd.to_numeric(gt[col], errors="coerce").to_numpy(dtype=float)
+		aligned_values = np.full(target.size, np.nan, dtype=float)
+		if exact.any():
+			aligned_values[exact] = source_values[right_indices[exact]]
+
+		valid = bracketed.copy()
+		if valid.any():
+			left_values = source_values[left_indices[valid]]
+			right_values = source_values[safe_right_indices[valid]]
+			left_times = source_times[left_indices[valid]]
+			right_times = source_times[safe_right_indices[valid]]
+			finite_endpoints = np.isfinite(left_values) & np.isfinite(right_values)
+			fractions = (target[valid] - left_times) / (right_times - left_times)
+			interpolated = left_values + fractions * (right_values - left_values)
+			valid_positions = np.flatnonzero(valid)
+			aligned_values[valid_positions[finite_endpoints]] = interpolated[finite_endpoints]
+		result[col] = aligned_values
+
+	return result[df_gt.columns]
+
+
 def _derive_output_path(
 	gt_path: Path,
 	out_path: Optional[Path],
@@ -40,7 +107,7 @@ def _derive_output_path(
 
 def main() -> None:
 	parser = argparse.ArgumentParser(
-		description="Compensate GT latency and align GT velocity to estimate timeline.",
+		description="Align GT velocity to estimate timestamps using linear interpolation.",
 	)
 	parser.add_argument("--est_csv", required=True, help="Estimate velocity CSV")
 	parser.add_argument("--gt_csv", required=True, help="GT velocity CSV")
@@ -56,8 +123,8 @@ def main() -> None:
 	parser.add_argument(
 		"--tolerance",
 		type=float,
-		default=None,
-		help="Optional max time delta (seconds) for merge_asof",
+		default=DEFAULT_ALIGNMENT_TOLERANCE_S,
+		help="Maximum distance to each bracketing GT sample in seconds (default: 0.025)",
 	)
 	args = parser.parse_args()
 
@@ -84,32 +151,14 @@ def main() -> None:
 	# Step 3: deterministic latency compensation on the GT timeline.
 	df_gt = _apply_latency(df_gt, args.time_col, args.gt_latency)
 
-	# Step 4: align to the estimate timeline using nearest-neighbor matching.
-	merge_kwargs = {
-		"on": args.time_col,
-		"direction": "nearest",
-		"suffixes": ("_est", "_gt"),
-	}
-	if args.tolerance is not None:
-		merge_kwargs["tolerance"] = args.tolerance
-
-	df_sync = pd.merge_asof(df_est, df_gt, **merge_kwargs)
-	gt_cols = []
-	rename_map = {}
-	for col in df_gt.columns:
-		if col in df_sync.columns:
-			gt_cols.append(col)
-			continue
-		gt_col = f"{col}_gt"
-		if gt_col in df_sync.columns:
-			gt_cols.append(gt_col)
-			rename_map[gt_col] = col
-	if not gt_cols:
-		raise KeyError(
-			"No GT columns found after merge. "
-			f"GT columns: {list(df_gt.columns)}; merged columns: {list(df_sync.columns)}"
-		)
-	gt_aligned = df_sync[gt_cols].rename(columns=rename_map)
+	# Step 4: linearly interpolate GT onto estimate timestamps.
+	gt_aligned = interpolate_ground_truth_to_timestamps(
+		df_gt,
+		df_est[args.time_col],
+		time_col=args.time_col,
+		tolerance_s=args.tolerance,
+	)
+	output_path.parent.mkdir(parents=True, exist_ok=True)
 	gt_aligned.to_csv(output_path, index=False)
 
 	print(f"Saved aligned GT CSV to {output_path}")

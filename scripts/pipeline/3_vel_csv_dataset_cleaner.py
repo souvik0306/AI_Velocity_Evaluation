@@ -26,6 +26,8 @@ PROFILE_RULES: Dict[str, List[ColumnRule]] = {
 	],
 }
 
+DEFAULT_MAX_INTERPOLATION_GAP_S = 0.025
+
 
 def _infer_profile(columns: Iterable[str]) -> str:
 	cols = set(columns)
@@ -161,10 +163,50 @@ def _apply_savitzky_golay_filter(
 			df.loc[valid_mask, col] = smoothed
 
 
-def _interpolate_columns(df: pd.DataFrame, columns: Iterable[str]) -> None:
+def _interpolate_columns(
+	df: pd.DataFrame,
+	columns: Iterable[str],
+	max_gap_s: float = DEFAULT_MAX_INTERPOLATION_GAP_S,
+) -> None:
+	"""Interpolate bounded, short gaps using the actual sample timestamps."""
+	if "time" not in df.columns:
+		raise ValueError("Timestamp-based interpolation requires a 'time' column")
+	if max_gap_s < 0:
+		raise ValueError("Maximum interpolation gap must be non-negative")
+
+	times = pd.to_numeric(df["time"], errors="coerce").to_numpy(dtype=float)
 	for col in columns:
-		if df[col].isna().any():
-			df[col] = df[col].interpolate(method="linear", limit_direction="both")
+		values = pd.to_numeric(df[col], errors="coerce").to_numpy(dtype=float)
+		missing_indices = np.flatnonzero(~np.isfinite(values) & np.isfinite(times))
+		valid_indices = np.flatnonzero(np.isfinite(values) & np.isfinite(times))
+		if missing_indices.size == 0 or valid_indices.size < 2:
+			continue
+
+		valid_times = times[valid_indices]
+		valid_values = values[valid_indices]
+		for index in missing_indices:
+			timestamp = times[index]
+			right = int(np.searchsorted(valid_times, timestamp, side="left"))
+
+			# A duplicate timestamp with a valid value is an exact, non-interpolated fill.
+			if right < valid_times.size and valid_times[right] == timestamp:
+				values[index] = valid_values[right]
+				continue
+			if right == 0 or right == valid_times.size:
+				continue
+
+			left = right - 1
+			span_s = valid_times[right] - valid_times[left]
+			if span_s <= 0 or span_s > max_gap_s + np.finfo(float).eps:
+				continue
+
+			fraction = (timestamp - valid_times[left]) / span_s
+			if 0.0 < fraction < 1.0:
+				values[index] = valid_values[left] + fraction * (
+					valid_values[right] - valid_values[left]
+				)
+
+		df[col] = values
 
 
 def clean_dataframe(
@@ -175,8 +217,11 @@ def clean_dataframe(
 	fill: str,
 	savgol_window: Optional[int] = None,
 	savgol_polyorder: int = 2,
+	max_interp_gap_s: float = DEFAULT_MAX_INTERPOLATION_GAP_S,
 ) -> Tuple[pd.DataFrame, Dict[str, int], Dict[str, int]]:
 	if "time" in df.columns:
+		df = df.copy()
+		df["time"] = pd.to_numeric(df["time"], errors="coerce")
 		df = df.sort_values("time")
 
 	profile = _infer_profile(df.columns)
@@ -197,13 +242,32 @@ def clean_dataframe(
 
 	# Interpolate before applying Savitzky-Golay filter
 	if fill == "linear":
-		_interpolate_columns(df, columns)
+		_interpolate_columns(df, columns, max_interp_gap_s)
 
 	# Apply Savitzky-Golay filter for smoothing if requested
 	if savgol_window is not None and savgol_window > 0:
 		_apply_savitzky_golay_filter(df, columns, savgol_window, savgol_polyorder)
 
 	return df, pruned_counts, filtered_counts
+
+
+def physically_prune_csv(
+	input_path: Path,
+	output_path: Path,
+	bound_overrides: List[Tuple[str, Optional[float], Optional[float]]],
+) -> Dict[str, int]:
+	"""Prune physical-bound violations without any other processing."""
+	df = pd.read_csv(input_path)
+	profile = _infer_profile(df.columns)
+	rules = PROFILE_RULES.get(profile, PROFILE_RULES["velocity"])
+	rules_by_column = _columns_for_rules(df, rules)
+	columns = list(rules_by_column.keys())
+	pruned_counts = _apply_physical_pruning(
+		df, columns, bound_overrides, rules_by_column
+	)
+	output_path.parent.mkdir(parents=True, exist_ok=True)
+	df.to_csv(output_path, index=False)
+	return pruned_counts
 
 
 def _derive_output_path(input_path: Path, out_dir: Optional[Path]) -> Path:
@@ -223,7 +287,7 @@ def _normalize_window(window: int) -> int:
 
 def main() -> None:
 	parser = argparse.ArgumentParser(
-		description="Clean CSV datasets with physical pruning and sliding median filtering.",
+		description="Physically prune estimate CSVs and fully clean GT/generic CSVs.",
 	)
 	parser.add_argument("--input", nargs="*", default=[], help="CSV files to clean")
 	parser.add_argument("--est_csv", help="Estimate velocity CSV file to clean")
@@ -246,12 +310,18 @@ def main() -> None:
 		"--fill",
 		choices=["none", "linear"],
 		default="linear",
-		help="Fill NaNs after filtering (default: linear to avoid NaNs)",
+		help="Fill short, bounded gaps using timestamp-based linear interpolation",
+	)
+	parser.add_argument(
+		"--max_interp_gap",
+		type=float,
+		default=DEFAULT_MAX_INTERPOLATION_GAP_S,
+		help="Maximum bounded timestamp span to interpolate in seconds (default: 0.025)",
 	)
 	parser.add_argument(
 		"--savgol_window",
 		type=int,
-		default=21,
+		default=11,
 		help="Savitzky-Golay filter window size for smoothing spikes (must be odd)",
 	)
 	parser.add_argument(
@@ -265,19 +335,32 @@ def main() -> None:
 	input_files: List[str] = []
 	if args.input:
 		input_files.extend(args.input)
-	if args.est_csv:
-		input_files.append(args.est_csv)
 	if args.gt_csv:
 		input_files.append(args.gt_csv)
 
-	if not input_files:
-		raise SystemExit("No input files provided. Use --input, --imu_csv, or --gt_csv.")
+	if not input_files and not args.est_csv:
+		raise SystemExit("No input files provided. Use --input, --est_csv, or --gt_csv.")
 
 	window = _normalize_window(args.window)
 	bound_overrides = _parse_bound_overrides(args.bound)
 	out_dir = Path(args.out_dir) if args.out_dir else None
 	if out_dir is not None:
 		out_dir.mkdir(parents=True, exist_ok=True)
+
+	if args.est_csv:
+		estimate_path = Path(args.est_csv)
+		if not estimate_path.exists():
+			print(f"Skipping missing file: {estimate_path}")
+		else:
+			estimate_output = _derive_output_path(estimate_path, out_dir)
+			estimate_pruned_counts = physically_prune_csv(
+				estimate_path, estimate_output, bound_overrides
+			)
+			print(f"Saved physically pruned estimate CSV to {estimate_output}")
+			if estimate_pruned_counts:
+				print("Physical pruning counts:")
+				for col, count in estimate_pruned_counts.items():
+					print(f"  {col}: {count}")
 
 	for input_path_str in input_files:
 		input_path = Path(input_path_str)
@@ -294,6 +377,7 @@ def main() -> None:
 			args.fill,
 			savgol_window=args.savgol_window,
 			savgol_polyorder=args.savgol_polyorder,
+			max_interp_gap_s=args.max_interp_gap,
 		)
 
 		output_path = _derive_output_path(input_path, out_dir)
