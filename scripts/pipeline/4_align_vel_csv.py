@@ -36,7 +36,12 @@ def interpolate_ground_truth_to_timestamps(
 	time_col: str = "time",
 	tolerance_s: Optional[float] = DEFAULT_ALIGNMENT_TOLERANCE_S,
 ) -> pd.DataFrame:
-	"""Linearly interpolate GT onto target timestamps without extrapolation."""
+	"""Linearly interpolate GT without extrapolation or oversized brackets.
+
+	``tolerance_s`` is the maximum total time between the two GT samples that
+	bracket a target timestamp. Exact timestamp matches remain valid regardless
+	of the distance to adjacent samples.
+	"""
 	if tolerance_s is not None and tolerance_s < 0:
 		raise ValueError("Alignment tolerance must be non-negative")
 
@@ -62,12 +67,10 @@ def interpolate_ground_truth_to_timestamps(
 	safe_right_indices = np.minimum(right_indices, source_times.size - 1)
 
 	if tolerance_s is not None:
-		left_distance = target - source_times[left_indices]
-		right_distance = source_times[safe_right_indices] - target
-		bracketed &= (
-			(left_distance <= tolerance_s + np.finfo(float).eps)
-			& (right_distance <= tolerance_s + np.finfo(float).eps)
+		bracket_span = (
+			source_times[safe_right_indices] - source_times[left_indices]
 		)
+		bracketed &= bracket_span <= tolerance_s + np.finfo(float).eps
 
 	for col in gt.columns:
 		if col == time_col:
@@ -124,7 +127,7 @@ def main() -> None:
 		"--tolerance",
 		type=float,
 		default=DEFAULT_ALIGNMENT_TOLERANCE_S,
-		help="Maximum distance to each bracketing GT sample in seconds (default: 0.025)",
+		help="Maximum total gap between bracketing GT samples in seconds (default: 0.025)",
 	)
 	args = parser.parse_args()
 

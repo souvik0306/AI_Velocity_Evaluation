@@ -398,7 +398,12 @@ def parse_arguments(
 	parser.add_argument("--savgol_window", type=int, default=11, help="Use 0 to disable smoothing")
 	parser.add_argument("--savgol_polyorder", type=int, default=2)
 	parser.add_argument("--gt_latency", type=float, default=0.025)
-	parser.add_argument("--tolerance", type=float, default=ALIGNER.DEFAULT_ALIGNMENT_TOLERANCE_S)
+	parser.add_argument(
+		"--tolerance",
+		type=float,
+		default=ALIGNER.DEFAULT_ALIGNMENT_TOLERANCE_S,
+		help="Maximum total gap between bracketing GT samples in seconds (default: 0.025)",
+	)
 	args = parser.parse_args()
 	args.bags_dir = resolve_path(args.bags_dir)
 	args.out_dir = resolve_path(args.out_dir)

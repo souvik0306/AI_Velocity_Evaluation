@@ -16,3 +16,8 @@ __pycache__/*
 
 !scripts/evaluations/README.md
 !scripts/utilities/README.md
+
+plot_*.py
+flowchart_*.py
+14_plot_*.py
+tests/*
