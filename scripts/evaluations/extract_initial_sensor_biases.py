@@ -41,18 +41,24 @@ from analyze_10th_sept_yaw import FLIGHTS as FLIGHTS_YAW  # noqa: E402
 DATASETS = {
 	"2026-07-28": (REPO_ROOT / "data" / "2026-07-28", FLIGHTS_28),
 	"2026-07-31": (REPO_ROOT / "data" / "2026-07-31", FLIGHTS_31),
-	"9th_Sept_AI_Hover_Rosbags": (
-		REPO_ROOT / "data" / "9th_Sept_AI_Hover_Rosbags",
+	"10th_Sept_AI_Hover_Rosbags": (
+		REPO_ROOT / "data" / "10th_Sept_AI_Hover_Rosbags",
 		FLIGHTS_HOVER,
 	),
 	"10th_Sept_AI_Yaw_Rosbags": (
 		REPO_ROOT / "data" / "10th_Sept_AI_Yaw_Rosbags",
 		FLIGHTS_YAW,
 	),
-	"High": (REPO_ROOT / "data" / "High", FLIGHTS_HIGH),
-	"Low-Dynamic": (REPO_ROOT / "data" / "Low-Dynamic", FLIGHTS_LOW),
-	"Medium": (REPO_ROOT / "data" / "Medium", FLIGHTS_MEDIUM),
-	"Super-High": (REPO_ROOT / "data" / "Super-High", FLIGHTS_SUPER_HIGH),
+	"10th_Sept_High": (REPO_ROOT / "data" / "10th_Sept_High", FLIGHTS_HIGH),
+	"10th_Sept_Low-Dynamic": (
+		REPO_ROOT / "data" / "10th_Sept_Low-Dynamic",
+		FLIGHTS_LOW,
+	),
+	"10th_Sept_Medium": (REPO_ROOT / "data" / "10th_Sept_Medium", FLIGHTS_MEDIUM),
+	"10th_Sept_Super-High": (
+		REPO_ROOT / "data" / "10th_Sept_Super-High",
+		FLIGHTS_SUPER_HIGH,
+	),
 }
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "results" / "initial_sensor_biases"
 AXES = ("x", "y", "z")

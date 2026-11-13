@@ -4,7 +4,7 @@
 from pathlib import Path
 from evaluation_common import evaluate_dataset
 
-BAGS_DIR = Path(__file__).resolve().parents[2] / "data" / "Low-Dynamic"
+BAGS_DIR = Path(__file__).resolve().parents[2] / "data" / "10th_Sept_Low-Dynamic"
 FLIGHTS = {
     "AI": {
         1: {"bag": "flight_1.bag", "start": 44.24},
