@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate yaw flight bags over configured 20-second windows."""
+"""Evaluate 10 September yaw flight bags over configured 20-second windows."""
 
 from pathlib import Path
 from evaluation_common import evaluate_dataset
