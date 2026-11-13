@@ -11,6 +11,8 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch
 import numpy as np
 import pandas as pd
 
@@ -92,7 +94,6 @@ def plot_direction_error_subplots(
 			error,
 			color=colors[index % len(colors)],
 			linewidth=DIRECTION.DATA_LINE_WIDTH,
-			label="Direction error (evaluated)",
 		)
 		low_speed_error = np.where(low_gt_speed, raw_error, np.nan)
 		axis.plot(
@@ -101,7 +102,6 @@ def plot_direction_error_subplots(
 			color=colors[index % len(colors)],
 			linewidth=DIRECTION.DATA_LINE_WIDTH,
 			alpha=DIRECTION.LOW_SPEED_LINE_ALPHA,
-			label=f"Direction error where GT < {min_gt_speed_mps:g} m/s",
 		)
 		if np.isfinite(mean_error):
 			axis.axhline(
@@ -109,16 +109,67 @@ def plot_direction_error_subplots(
 				color="#ff7f0e",
 				linestyle="--",
 				linewidth=DIRECTION.REFERENCE_LINE_WIDTH,
-				label=f"Mean ({mean_error:.2f} deg)",
+			)
+			axis.text(
+				0.985,
+				0.92,
+				f"Mean: {mean_error:.2f} deg",
+				transform=axis.transAxes,
+				ha="right",
+				va="top",
+				fontsize=DIRECTION.MIN_FONT_SIZE,
+				bbox={
+					"boxstyle": "round,pad=0.25",
+					"facecolor": "white",
+					"edgecolor": "0.75",
+					"alpha": 0.9,
+				},
 			)
 		axis.set_title(label)
 		axis.set_ylabel("Direction error (deg)")
-		axis.legend(loc="best")
 		DIRECTION._style_axis(axis)
 
 	axes[-1, 0].set_xlabel("Time from evaluation-window start (s)", fontsize=24)
+	legend_handles = [
+		Line2D(
+			[0],
+			[0],
+			color="#4c4c4c",
+			linewidth=DIRECTION.DATA_LINE_WIDTH,
+			label="Evaluated direction error",
+		),
+		Line2D(
+			[0],
+			[0],
+			color="#4c4c4c",
+			linewidth=DIRECTION.DATA_LINE_WIDTH,
+			alpha=DIRECTION.LOW_SPEED_LINE_ALPHA,
+			label=f"Direction error where GT < {min_gt_speed_mps:g} m/s",
+		),
+		Line2D(
+			[0],
+			[0],
+			color="#ff7f0e",
+			linestyle="--",
+			linewidth=DIRECTION.REFERENCE_LINE_WIDTH,
+			label="Per-flight mean",
+		),
+		Patch(
+			facecolor=DIRECTION.LOW_SPEED_REGION_COLOR,
+			edgecolor=DIRECTION.LOW_SPEED_REGION_EDGE_COLOR,
+			alpha=DIRECTION.LOW_SPEED_REGION_ALPHA,
+			label=f"Low-speed region: GT < {min_gt_speed_mps:g} m/s",
+		),
+	]
 	fig.suptitle(title, y=0.995)
-	fig.tight_layout(rect=(0, 0, 1, 0.985))
+	fig.legend(
+		handles=legend_handles,
+		loc="upper center",
+		bbox_to_anchor=(0.5, 0.955),
+		ncol=4,
+		framealpha=0.95,
+	)
+	fig.tight_layout(rect=(0, 0, 1, 0.90))
 	output_path.parent.mkdir(parents=True, exist_ok=True)
 	fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
 	plt.close(fig)

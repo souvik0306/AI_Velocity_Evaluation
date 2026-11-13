@@ -374,7 +374,7 @@ def parse_arguments(
 	parser.add_argument("--group", choices=["all", *flights], default="all")
 	parser.add_argument(
 		"--duration",
-		choices=["all", "5s", "10s", "20s"],
+		choices=["all", "3s", "5s", "10s", "20s"],
 		default=default_duration,
 	)
 	parser.add_argument("--velocity_topic", default=DEFAULT_EST_TOPIC)

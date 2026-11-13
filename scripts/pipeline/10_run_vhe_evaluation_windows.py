@@ -45,6 +45,7 @@ def load_script_module(filename: str, module_name: str):
 
 
 CLEANER = load_script_module("3_vel_csv_dataset_cleaner.py", "vel_csv_dataset_cleaner")
+ALIGNER = load_script_module("4_align_vel_csv.py", "velocity_aligner")
 VHE = load_script_module("9_velocity_heading_error.py", "velocity_heading_error")
 
 
@@ -57,6 +58,7 @@ def clean_velocity_csv(
 	fill: str,
 	savgol_window: Optional[int],
 	savgol_polyorder: int,
+	max_interp_gap_s: float = CLEANER.DEFAULT_MAX_INTERPOLATION_GAP_S,
 ) -> Tuple[Path, Dict[str, int], Dict[str, int]]:
 	df = pd.read_csv(input_path)
 	cleaned, pruned_counts, filtered_counts = CLEANER.clean_dataframe(
@@ -67,6 +69,7 @@ def clean_velocity_csv(
 		fill,
 		savgol_window=savgol_window,
 		savgol_polyorder=savgol_polyorder,
+		max_interp_gap_s=max_interp_gap_s,
 	)
 	output_path.parent.mkdir(parents=True, exist_ok=True)
 	cleaned.to_csv(output_path, index=False)
@@ -94,29 +97,11 @@ def align_ground_truth_to_estimate(
 		df_gt["time"] = df_gt["time"] - gt_latency
 		df_gt = df_gt.sort_values("time").reset_index(drop=True)
 
-	merge_kwargs = {
-		"on": "time",
-		"direction": "nearest",
-		"suffixes": ("_est", "_gt"),
-	}
-	if tolerance is not None:
-		merge_kwargs["tolerance"] = tolerance
-
-	df_sync = pd.merge_asof(df_est, df_gt, **merge_kwargs)
-	gt_cols = []
-	rename_map = {}
-	for col in df_gt.columns:
-		if col in df_sync.columns:
-			gt_cols.append(col)
-			continue
-		gt_col = f"{col}_gt"
-		if gt_col in df_sync.columns:
-			gt_cols.append(gt_col)
-			rename_map[gt_col] = col
-	if not gt_cols:
-		raise KeyError(f"No GT columns found after alignment for {gt_clean_path}")
-
-	gt_aligned = df_sync[gt_cols].rename(columns=rename_map)
+	gt_aligned = ALIGNER.interpolate_ground_truth_to_timestamps(
+		df_gt,
+		df_est["time"],
+		tolerance_s=tolerance,
+	)
 	output_path.parent.mkdir(parents=True, exist_ok=True)
 	gt_aligned.to_csv(output_path, index=False)
 	return output_path
@@ -334,15 +319,10 @@ def process_flight_window(
 	gt_clean = group_out / f"{flight_name}_vel_gt_clean.csv"
 	gt_aligned = group_out / f"{flight_name}_vel_gt_clean_aligned.csv"
 
-	clean_velocity_csv(
+	CLEANER.physically_prune_csv(
 		est_raw,
 		est_clean,
-		args.clean_window,
-		args.median_tol,
 		args.bound_overrides,
-		args.fill,
-		args.savgol_window,
-		args.savgol_polyorder,
 	)
 	clean_velocity_csv(
 		gt_raw,
@@ -353,6 +333,7 @@ def process_flight_window(
 		args.fill,
 		args.savgol_window,
 		args.savgol_polyorder,
+		args.max_interp_gap,
 	)
 	align_ground_truth_to_estimate(gt_latency=args.gt_latency, tolerance=args.tolerance, est_clean_path=est_clean, gt_clean_path=gt_clean, output_path=gt_aligned)
 	est_window, gt_window = clip_velocity_window(
@@ -454,10 +435,21 @@ def parse_arguments() -> argparse.Namespace:
 		help="Override cleaning bounds pattern:min:max, same as 3_vel_csv_dataset_cleaner.py",
 	)
 	parser.add_argument("--fill", choices=["none", "linear"], default="linear", help="NaN fill mode")
-	parser.add_argument("--savgol_window", type=int, default=21, help="Savitzky-Golay smoothing window")
+	parser.add_argument(
+		"--max_interp_gap",
+		type=float,
+		default=CLEANER.DEFAULT_MAX_INTERPOLATION_GAP_S,
+		help="Maximum bounded GT gap to interpolate in seconds (default: 0.025)",
+	)
+	parser.add_argument("--savgol_window", type=int, default=11, help="Savitzky-Golay smoothing window")
 	parser.add_argument("--savgol_polyorder", type=int, default=2, help="Savitzky-Golay polynomial order")
 	parser.add_argument("--gt_latency", type=float, default=0.025, help="Seconds to subtract from GT time")
-	parser.add_argument("--tolerance", type=float, default=None, help="Optional max time delta for alignment")
+	parser.add_argument(
+		"--tolerance",
+		type=float,
+		default=ALIGNER.DEFAULT_ALIGNMENT_TOLERANCE_S,
+		help="Maximum total gap between bracketing GT samples (default: 0.025)",
+	)
 	args = parser.parse_args()
 	args.clean_window = CLEANER._normalize_window(args.clean_window)
 	args.bound_overrides = CLEANER._parse_bound_overrides(args.bound or DEFAULT_VELOCITY_BOUNDS)

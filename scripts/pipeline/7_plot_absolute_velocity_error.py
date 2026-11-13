@@ -2,7 +2,7 @@
 
 import argparse
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Tuple
 
 import matplotlib
 
@@ -62,6 +62,22 @@ def _merge_plot_data(
 	return merged.sort_values("time").reset_index(drop=True)
 
 
+def _fit_horizontal_error_drift(merged: pd.DataFrame) -> Tuple[float, float]:
+	"""Fit horizontal-error magnitude against time, ignoring invalid samples."""
+	time_arr = merged["time"].to_numpy(dtype=float)
+	err_x = merged["err_x"].to_numpy(dtype=float)
+	err_y = merged["err_y"].to_numpy(dtype=float)
+	finite = np.isfinite(time_arr) & np.isfinite(err_x) & np.isfinite(err_y)
+	if finite.sum() < 2:
+		return float("nan"), float("nan")
+
+	# Keep t=0 anchored to the evaluation-window start even if its error is invalid.
+	t = time_arr[finite] - time_arr[0]
+	e_v = np.hypot(err_x[finite], err_y[finite])
+	drift_rate, drift_intercept = np.polyfit(t, e_v, 1)
+	return float(drift_rate), float(drift_intercept)
+
+
 def _style_axis(ax) -> None:
 	ax.xaxis.set_major_locator(MaxNLocator(nbins=12))
 	ax.xaxis.set_minor_locator(AutoMinorLocator(2))
@@ -103,39 +119,75 @@ def _plot_axis(
 	est_col = f"vel_{axis}_est"
 	gt_col = f"vel_{axis}_gt"
 
-	fig, ax_vel = plt.subplots(figsize=(16, 8.5))
+	fig, (ax_vel, ax_err) = plt.subplots(
+		2,
+		1,
+		figsize=(16, 11),
+		sharex=True,
+		constrained_layout=True,
+		gridspec_kw={"height_ratios": (1.55, 1)},
+	)
 
 	ax_vel.plot(
 		rel_time,
-		merged[err_col].abs().to_numpy(dtype=float),
-		label=f"|{err_col}|",
-		color="#1f42b4",
-		linewidth=4.0,
-	)
-	ax_vel.plot(
-		rel_time,
 		merged[est_col].to_numpy(dtype=float),
-		label=f"est_{axis}",
+		label=f"Estimate $v_{axis}$",
 		color="#d62728",
 		linewidth=4.0,
 	)
 	ax_vel.plot(
 		rel_time,
 		merged[gt_col].to_numpy(dtype=float),
-		label=f"gt_{axis}",
+		label=f"Ground truth $v_{axis}$",
 		color="#2ca02c",
 		linewidth=4.0,
 	)
-	ax_vel.set_title(f"Absolute Velocity Error and Velocity Comparison: {axis.upper()}", fontsize=22)
-	ax_vel.set_xlabel(
-		_window_xlabel(time0, time1, flight_time_zero),
-		fontsize=19,
-	)
-	ax_vel.set_ylabel("Velocity / error (m/s)", fontsize=19)
+	ax_vel.set_title(f"{axis.upper()} Velocity: Estimate vs Ground Truth", fontsize=22)
+	ax_vel.set_ylabel(f"$v_{axis}$ (m/s)", fontsize=19)
 	ax_vel.legend(loc="best", fontsize=16)
 	_style_axis(ax_vel)
 
-	fig.tight_layout()
+	signed_error = merged[err_col].to_numpy(dtype=float)
+	abs_error = np.abs(signed_error)
+	ax_err.plot(
+		rel_time,
+		abs_error,
+		label=rf"$|e_{axis}| = |v_{axis}^{{est}} - v_{axis}^{{GT}}|$",
+		color="#1f42b4",
+		linewidth=3.0,
+	)
+	if abs_error.size and np.isfinite(abs_error[0]):
+		ax_err.scatter(
+			[rel_time[0]],
+			[abs_error[0]],
+			s=110,
+			color="#ff7f0e",
+			edgecolor="black",
+			linewidth=1.2,
+			zorder=5,
+			clip_on=False,
+			label="First evaluation sample",
+		)
+		ax_err.annotate(
+			f"$e_{axis}(0)$ = {signed_error[0]:+.3f} m/s\n"
+			f"$|e_{axis}(0)|$ = {abs_error[0]:.3f} m/s",
+			xy=(rel_time[0], abs_error[0]),
+			xytext=(18, 18),
+			textcoords="offset points",
+			fontsize=15,
+			bbox={"boxstyle": "round,pad=0.35", "fc": "white", "alpha": 0.9},
+			arrowprops={"arrowstyle": "->", "color": "#333333", "linewidth": 1.5},
+		)
+	ax_err.axhline(0.0, color="#555555", linewidth=1.5, linestyle="--", alpha=0.7)
+	ax_err.set_xlabel(
+		_window_xlabel(time0, time1, flight_time_zero),
+		fontsize=19,
+	)
+	ax_err.set_ylabel(f"Absolute X error (m/s)" if axis == "x" else f"Absolute Y error (m/s)", fontsize=19)
+	ax_err.legend(loc="best", fontsize=15)
+	_style_axis(ax_err)
+	ax_err.set_xlim(float(rel_time[0]), float(rel_time[-1]))
+
 	output_path = out_dir / f"{prefix}_abs_error_vel_{axis}.png"
 	fig.savefig(output_path, dpi=dpi, bbox_inches="tight")
 	if not show:
@@ -367,10 +419,7 @@ def _plot_drift_fit(
 		+ merged["err_y"].to_numpy(dtype=float) ** 2
 	) ** 0.5
 
-	if len(t) >= 2:
-		drift_rate, drift_intercept = np.polyfit(t, e_v, 1)
-	else:
-		drift_rate, drift_intercept = float("nan"), float("nan")
+	drift_rate, drift_intercept = _fit_horizontal_error_drift(merged)
 	fit = drift_rate * t + drift_intercept
 
 	fig, ax_err = plt.subplots(figsize=(16, 8.5))
@@ -487,24 +536,9 @@ def main() -> None:
 	gt_df = _load_csv(gt_path, REQUIRED_VEL_COLS)
 	merged = _merge_plot_data(err_df, est_df, gt_df)
 
-	# Horizontal velocity error magnitude
-	xy_error = (
-		merged["err_x"].to_numpy(dtype=float) ** 2
-		+ merged["err_y"].to_numpy(dtype=float) ** 2
-	) ** 0.5
-
 	# Estimate drift rate (least-squares linear fit e_v(t) ~= drift_rate*t + drift_intercept)
 	# where e_v is horizontal velocity error magnitude and t is time since window start
-	time_arr = merged["time"].to_numpy(dtype=float)
-	t = time_arr - time_arr[0]
-	e_v = xy_error
-	if len(t) >= 2:
-		drift_rate, drift_intercept = np.polyfit(t, e_v, 1)
-		drift_rate = float(drift_rate)
-		drift_intercept = float(drift_intercept)
-	else:
-		drift_rate = float("nan")
-		drift_intercept = float("nan")
+	drift_rate, drift_intercept = _fit_horizontal_error_drift(merged)
 
 	start_time = float(merged["time"].iloc[0])
 	end_time = float(merged["time"].iloc[-1])

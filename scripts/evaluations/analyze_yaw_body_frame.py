@@ -58,10 +58,15 @@ def parse_arguments() -> argparse.Namespace:
 		help="Cleaning bound pattern:min:max; default is vel_*:-8:8",
 	)
 	parser.add_argument("--fill", choices=["none", "linear"], default="linear")
+	parser.add_argument(
+		"--max_interp_gap",
+		type=float,
+		default=common.CLEANER.DEFAULT_MAX_INTERPOLATION_GAP_S,
+	)
 	parser.add_argument("--savgol_window", type=int, default=21)
 	parser.add_argument("--savgol_polyorder", type=int, default=2)
-	parser.add_argument("--gt_latency", type=float, default=0.025)
-	parser.add_argument("--tolerance", type=float, default=None)
+	parser.add_argument("--gt_latency", type=float, default=0.0)
+	parser.add_argument("--tolerance", type=float, default=common.ALIGNER.DEFAULT_ALIGNMENT_TOLERANCE_S)
 	args = parser.parse_args()
 	args.bags_dir = common.resolve_path(args.bags_dir)
 	args.out_dir = common.resolve_path(args.out_dir)
@@ -407,15 +412,13 @@ def evaluate_yaw_body_frame() -> List[Dict[str, object]]:
 			gt_clean = cleaned_dir / f"{flight_name}_vel_gt_clean.csv"
 			gt_with_pose = cleaned_dir / f"{flight_name}_vel_gt_clean_with_pose.csv"
 			gt_aligned = cleaned_dir / f"{flight_name}_vel_gt_clean_aligned.csv"
-			est_pruned, est_filtered = common.clean_velocity_csv(
-				est_raw, est_clean, args.clean_window, args.median_tol,
-				args.bound_overrides, args.fill, args.savgol_window,
-				args.savgol_polyorder,
+			est_pruned = common.physically_prune_velocity_csv(
+				est_raw, est_clean, args.bound_overrides,
 			)
 			gt_pruned, gt_filtered = common.clean_velocity_csv(
 				gt_raw, gt_clean, args.clean_window, args.median_tol,
 				args.bound_overrides, args.fill, args.savgol_window,
-				args.savgol_polyorder,
+				args.savgol_polyorder, args.max_interp_gap,
 			)
 			match_pose_to_cleaned_gt(gt_clean, pose_raw, gt_with_pose)
 			common.align_ground_truth(
@@ -430,7 +433,6 @@ def evaluate_yaw_body_frame() -> List[Dict[str, object]]:
 				"pose_extracted_rows": pose_rows,
 				"estimate_bound_pruned_values": sum(est_pruned.values()),
 				"gt_bound_pruned_values": sum(gt_pruned.values()),
-				"estimate_median_filtered_values": sum(est_filtered.values()),
 				"gt_median_filtered_values": sum(gt_filtered.values()),
 			})
 

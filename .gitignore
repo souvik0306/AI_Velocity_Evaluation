@@ -21,3 +21,8 @@ plot_*.py
 flowchart_*.py
 14_plot_*.py
 tests/*
+
+analyze_scaled_*
+scripts/evaluations/run_oct_100ms_200ms_rmse.py
+scripts/evaluations/export_oct_initial_offsets.py
+scripts/evaluations/analyze_original_ulg.py
