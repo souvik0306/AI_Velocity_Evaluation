@@ -14,7 +14,11 @@ __pycache__/*
 .vscode/*
 *.md
 
+!data/README.md
+!results/README.md
+!results/ulg/README.md
 !scripts/evaluations/README.md
+!scripts/evaluations/ulg/README.md
 !scripts/utilities/README.md
 
 plot_*.py
@@ -23,6 +27,16 @@ flowchart_*.py
 tests/*
 
 analyze_scaled_*
-scripts/evaluations/run_oct_100ms_200ms_rmse.py
-scripts/evaluations/export_oct_initial_offsets.py
-scripts/evaluations/analyze_original_ulg.py
+scripts/evaluations/reports/run_oct_100ms_200ms_rmse.py
+scripts/evaluations/reports/export_oct_initial_offsets.py
+scripts/evaluations/ulg/analyze_original_ulg.py
+scripts/evaluations/ulg/analyze_ai_baseline_no_bias_no_cov_limits_20s_ulg.py
+scripts/evaluations/ulg/analyze_ai_baseline_no_bias_no_cov_limits_ulg.py
+scripts/evaluations/ulg/analyze_ai_baseline_with_bias_no_cov_limits_20s_ulg.py
+scripts/evaluations/ulg/analyze_ai_baseline_with_bias_no_cov_limits_ulg.py
+scripts/evaluations/ulg/analyze_original_20s_ulg.py
+scripts/evaluations/ulg/analyze_original_repeat_17_nov_20s_ulg.py
+scripts/evaluations/ulg/analyze_original_repeat_17_nov_ulg.py
+scripts/evaluations/ulg/eval_ulg.py
+scripts/evaluations/ulg/README.md
+scripts/evaluations/ulg/plots/diagnose_original_repeat_flight1_y.py

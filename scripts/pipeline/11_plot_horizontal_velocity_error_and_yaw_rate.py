@@ -26,9 +26,25 @@ from scipy.signal import savgol_filter
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_SUMMARY_CSV = REPO_ROOT / "results" / "yaw" / "20s" / "yaw_20s_summary_by_flight.csv"
-DEFAULT_BAGS_DIR = REPO_ROOT / "data" / "10th_Sept_AI_Yaw_Rosbags"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "results" / "yaw" / "20s" / "yaw_rate_analysis"
+DEFAULT_SUMMARY_CSV = (
+	REPO_ROOT
+	/ "results"
+	/ "flight_sessions"
+	/ "10th_Sept"
+	/ "AI_Yaw_Rosbags"
+	/ "20s"
+	/ "yaw_20s_summary_by_flight.csv"
+)
+DEFAULT_BAGS_DIR = REPO_ROOT / "data" / "flight_sessions" / "10th_Sept" / "AI_Yaw_Rosbags"
+DEFAULT_OUTPUT_DIR = (
+	REPO_ROOT
+	/ "results"
+	/ "flight_sessions"
+	/ "10th_Sept"
+	/ "AI_Yaw_Rosbags"
+	/ "20s"
+	/ "yaw_rate_analysis"
+)
 DEFAULT_POSE_TOPIC = "/vrpn_client_node/AIIMU1/pose"
 REQUIRED_SUMMARY_COLUMNS = ("group", "bag", "flight", "bias_errors_file")
 REQUIRED_ERROR_COLUMNS = ("time", "err_x", "err_y")

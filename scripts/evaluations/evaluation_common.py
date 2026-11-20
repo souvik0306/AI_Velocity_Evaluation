@@ -14,6 +14,8 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT_DIR = REPO_ROOT
 PIPELINE_DIR = REPO_ROOT / "scripts" / "pipeline"
+FLIGHT_DATA_ROOT = REPO_ROOT / "data" / "flight_sessions"
+FLIGHT_RESULTS_ROOT = REPO_ROOT / "results" / "flight_sessions"
 DEFAULT_VELOCITY_BOUNDS = ["vel_*:-8:8"]
 DEFAULT_EST_TOPIC = "/mavros/local_position/velocity_local"
 DEFAULT_GT_TOPIC = "/vrpn_client_node/AIIMU1/twist"
@@ -427,11 +429,22 @@ def evaluate_dataset(
 	hover_analysis: bool = False,
 	bags_grouped: bool = True,
 	default_duration: str = "all",
+	results_dir: Optional[Path] = None,
+	result_name: Optional[str] = None,
 ) -> List[Dict[str, object]]:
-	group_name = Path(sys.argv[0]).stem[len("analyze_"):]
+	group_name = result_name or Path(sys.argv[0]).stem[len("analyze_"):]
+	if results_dir is None:
+		try:
+			relative_dataset = bags_dir.resolve().relative_to(FLIGHT_DATA_ROOT.resolve())
+		except ValueError:
+			output_dir = REPO_ROOT / "results" / group_name
+		else:
+			output_dir = FLIGHT_RESULTS_ROOT / relative_dataset
+	else:
+		output_dir = results_dir
 	args = parse_arguments(
 		bags_dir,
-		REPO_ROOT / "results" / group_name,
+		output_dir,
 		flights,
 		default_duration=default_duration,
 	)
